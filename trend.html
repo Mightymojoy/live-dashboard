@@ -187,7 +187,7 @@
       </div>
     </div>
     
-    <!-- 主播效率对比表（使用主图表的日期筛选） -->
+    <!-- 主播效率对比表（与全部筛选条件联动） -->
     <div class="data-table-section">
       <h4>🎯 主播效率对比表</h4>
       <div id="anchorFilterStatus" style="background:#ffebee;color:#c62828;padding:8px 12px;margin-bottom:10px;border-radius:4px;font-size:12px;"></div>
@@ -195,6 +195,18 @@
         <table class="anchor-table">
           <thead id="anchorTableHead"></thead>
           <tbody id="anchorTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- 场控效率对比表 -->
+    <div class="data-table-section">
+      <h4>🎮 场控效率对比表</h4>
+      <div id="supervisorFilterStatus" style="background:#e8f5e9;color:#2e7d32;padding:8px 12px;margin-bottom:10px;border-radius:4px;font-size:12px;"></div>
+      <div class="anchor-table-wrapper">
+        <table class="anchor-table">
+          <thead id="supervisorTableHead"></thead>
+          <tbody id="supervisorTableBody"></tbody>
         </table>
       </div>
     </div>
@@ -560,43 +572,9 @@
       return `${d.getFullYear()}-W${weekNum}`;
     }
     
-    // 筛选数据
+    // 筛选数据（复用filterRecordsAll，保留函数名兼容性）
     function filterRecords(records) {
-      const startDateInput = document.getElementById('startDate').value;
-      const endDateInput = document.getElementById('endDate').value;
-      
-      // 将日期转换为完整日期格式（含年份）
-      let startFullDate = null, endFullDate = null;
-      if (startDateInput) {
-        const parts = startDateInput.split(/[-\/]/);
-        const year = parts[0];
-        const m = parts[parts.length - 2];
-        const d = parts[parts.length - 1];
-        startFullDate = `${year}-${m}-${d}`;
-      }
-      if (endDateInput) {
-        const parts = endDateInput.split(/[-\/]/);
-        const year = parts[0];
-        const m = parts[parts.length - 2];
-        const d = parts[parts.length - 1];
-        endFullDate = `${year}-${m}-${d}`;
-      }
-      
-      return records.filter(r => {
-        if (!r.date || !r.yearMonth) return false;
-        // 用 yearMonth + date 构造完整日期
-        const fullDate = `${r.yearMonth.slice(0, 4)}-${r.date}`;
-        if (startFullDate && fullDate < startFullDate) return false;
-        if (endFullDate && fullDate > endFullDate) return false;
-        // 时段筛选
-        if (selectedTimeSlot && r.timeSlot && r.timeSlot !== selectedTimeSlot) return false;
-        // 其他筛选
-        if (filters.anchors.length > 0 && r.anchor && !filters.anchors.includes(r.anchor)) return false;
-        if (filters.platformActivities.length > 0 && r.platformActivity && !filters.platformActivities.includes(r.platformActivity)) return false;
-        if (filters.liveActivities.length > 0 && r.liveActivity && !filters.liveActivities.includes(r.liveActivity)) return false;
-        if (filters.supervisors.length > 0 && r.supervisor && !filters.supervisors.includes(r.supervisor)) return false;
-        return true;
-      });
+      return filterRecordsAll(records);
     }
     
       // 数据聚合
@@ -806,6 +784,9 @@
         // 主播效率对比表
         renderAnchorTable();
         
+        // 场控效率对比表
+        renderSupervisorTable();
+        
       } catch (e) {
         console.error('图表更新失败:', e);
       }
@@ -839,96 +820,89 @@
       container.innerHTML = html;
     }
     
-    // 渲染主播效率对比表（与主图表日期联动）
-    function renderAnchorTable() {
-      const records = allData[currentShop] || [];
-      if (records.length === 0) return;
+    // 通用：从日期输入框解析完整日期字符串
+    function parseDateInput(inputVal) {
+      if (!inputVal) return null;
+      const parts = inputVal.split(/[-\/]/);
+      const year = parts[0];
+      const m = parts[parts.length - 2];
+      const d = parts[parts.length - 1];
+      return `${year}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    }
+    
+    // 通用：按所有筛选条件过滤记录
+    function filterRecordsAll(records) {
+      const startFullDate = parseDateInput(document.getElementById('startDate').value);
+      const endFullDate = parseDateInput(document.getElementById('endDate').value);
       
-      // 直接使用主图表的日期选择器（而不是独立的日期选择器）
-      const mainStartInput = document.getElementById('startDate').value;
-      const mainEndInput = document.getElementById('endDate').value;
-      
-      // 将日期转换为完整日期格式（含年份）
-      let startFullDate = null, endFullDate = null;
-      if (mainStartInput) {
-        const parts = mainStartInput.split(/[-\/]/);
-        const year = parts[0];  // 年份
-        const m = parts[parts.length - 2];
-        const d = parts[parts.length - 1];
-        startFullDate = `${year}-${m}-${d}`;
-      }
-      if (mainEndInput) {
-        const parts = mainEndInput.split(/[-\/]/);
-        const year = parts[0];  // 年份
-        const m = parts[parts.length - 2];
-        const d = parts[parts.length - 1];
-        endFullDate = `${year}-${m}-${d}`;
-      }
-      
-      // 主播表只按主图表的日期筛选，不受其他筛选条件影响（考虑年份）
-      const filtered = records.filter(r => {
+      return records.filter(r => {
         if (!r.date || !r.yearMonth) return false;
-        // 用 yearMonth + date 构造完整日期
         const fullDate = `${r.yearMonth.slice(0, 4)}-${r.date}`;
         if (startFullDate && fullDate < startFullDate) return false;
         if (endFullDate && fullDate > endFullDate) return false;
+        // 时段筛选
+        if (selectedTimeSlot && r.timeSlot !== selectedTimeSlot) return false;
+        // 主播筛选
+        if (filters.anchors.length > 0 && !filters.anchors.includes(r.anchor)) return false;
+        // 平台活动筛选
+        if (filters.platformActivities.length > 0 && !filters.platformActivities.includes(r.platformActivity)) return false;
+        // 直播活动筛选
+        if (filters.liveActivities.length > 0 && !filters.liveActivities.includes(r.liveActivity)) return false;
+        // 场控筛选
+        if (filters.supervisors.length > 0 && !filters.supervisors.includes(r.supervisor)) return false;
         return true;
       });
+    }
+    
+    // 通用：计算效率对比表的分组聚合 + 衍生指标
+    function calcGroupMetrics(raw) {
+      const g = Object.assign({}, raw);
+      g.netSales = g.sales - g.refund;
+      g.durationHour = g.durationMin / 60;
+      g.hourlyGMV = g.durationMin > 0 ? g.sales / (g.durationMin / 60) : 0;
+      g.hourlyGSV = g.durationMin > 0 ? g.netSales / (g.durationMin / 60) : 0;
+      g.hourlyUV = g.durationMin > 0 ? g.uv / (g.durationMin / 60) : 0;
+      g.roiPre = g.adCost > 0 ? g.sales / g.adCost : 0;
+      g.roiPost = g.adCost > 0 ? g.netSales / g.adCost : 0;
+      g.refundRate = g.sales > 0 ? g.refund / g.sales : 0;
+      g.cvr = g.uv > 0 ? g.buyers / g.uv : 0;
+      g.uvRate = g.exposureUsers > 0 ? g.uv / g.exposureUsers : 0;
+      g.fansRate = g.uv > 0 ? g.newFans / g.uv : 0;
+      g.avgPrice = g.buyers > 0 ? g.sales / g.buyers : 0;
+      return g;
+    }
+    
+    // 通用：渲染效率对比表
+    function renderCompareTable(options) {
+      const { filtered, groupField, groupLabel, headId, bodyId, statusId, statusStyle } = options;
       
-      // 显示筛选状态
-      const statusEl = document.getElementById('anchorFilterStatus');
-      if (statusEl) {
-        const allAnchors = [...new Set(records.map(r => r.anchor).filter(Boolean))];
-        const filteredAnchors = [...new Set(filtered.map(r => r.anchor).filter(Boolean))];
-        statusEl.innerHTML = `
-          <strong>当前筛选状态：</strong><br>
-          日期范围: ${startFullDate || '全部'} 至 ${endFullDate || '全部'}<br>
-          店铺: ${currentShop}<br>
-          总记录: ${records.length} → 筛选后: ${filtered.length}<br>
-          总主播: ${allAnchors.length} → 筛选后: ${filteredAnchors.length}<br>
-          ${filteredAnchors.length > 0 ? '当前主播: ' + filteredAnchors.join(', ') : '<span style="color:red">无数据</span>'}
-        `;
-      }
-      
-      // 按主播分组
-      const anchorGroups = {};
+      // 按分组字段汇总
+      const groups = {};
       filtered.forEach(r => {
-        const anchor = r.anchor || '未知主播';
-        if (!anchorGroups[anchor]) {
-          anchorGroups[anchor] = {
-            count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0
-          };
+        const key = r[groupField] || ('未知' + groupLabel);
+        if (!groups[key]) {
+          groups[key] = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0 };
         }
-        anchorGroups[anchor].count++;
-        anchorGroups[anchor].sales += r.sales || 0;
-        anchorGroups[anchor].refund += r.refund || 0;
-        anchorGroups[anchor].uv += r.uv || 0;
-        anchorGroups[anchor].newFans += r.newFans || 0;
-        anchorGroups[anchor].buyers += r.buyers || 0;
-        anchorGroups[anchor].adCost += r.adCost || 0;
-        anchorGroups[anchor].durationMin += r.durationMin || 0;
-        anchorGroups[anchor].exposureUsers += r.exposureUsers || 0;
+        groups[key].count++;
+        groups[key].sales += r.sales || 0;
+        groups[key].refund += r.refund || 0;
+        groups[key].uv += r.uv || 0;
+        groups[key].newFans += r.newFans || 0;
+        groups[key].buyers += r.buyers || 0;
+        groups[key].adCost += r.adCost || 0;
+        groups[key].durationMin += r.durationMin || 0;
+        groups[key].exposureUsers += r.exposureUsers || 0;
       });
-      
-      // 按净销售额排序（只包含在日期范围内有数据的主播）
-      const anchors = Object.keys(anchorGroups).sort((a, b) => anchorGroups[b].netSales - anchorGroups[a].netSales);
       
       // 计算衍生指标
-      Object.keys(anchorGroups).forEach(anchor => {
-        const g = anchorGroups[anchor];
-        g.netSales = g.sales - g.refund;
-        g.hourlyGSV = g.durationMin > 0 ? g.netSales / (g.durationMin / 60) : 0;
-        g.hourlyUV = g.durationMin > 0 ? g.uv / (g.durationMin / 60) : 0;
-        g.roiPre = g.adCost > 0 ? g.sales / g.adCost : 0;
-        g.roiPost = g.adCost > 0 ? g.netSales / g.adCost : 0;
-        g.refundRate = g.sales > 0 ? g.refund / g.sales : 0;
-        g.cvr = g.uv > 0 ? g.buyers / g.uv : 0;
-        g.uvRate = g.exposureUsers > 0 ? g.uv / g.exposureUsers : 0;
-        g.fansRate = g.uv > 0 ? g.newFans / g.uv : 0;
-        g.avgPrice = g.buyers > 0 ? g.sales / g.buyers : 0;
+      Object.keys(groups).forEach(key => {
+        groups[key] = calcGroupMetrics(groups[key]);
       });
       
-      // 显示指标：Y1轴选中指标 + Y2轴选中指标
+      // 按净销售额排序
+      const keys = Object.keys(groups).sort((a, b) => groups[b].netSales - groups[a].netSales);
+      
+      // 显示指标：Y1轴 + Y2轴
       const displayMetrics = [
         ...selectedY1Metrics.map(k => ({ key: k, label: getMetricLabel(k), isPercent: false })),
         ...selectedY2Metrics.map(k => ({ key: k, label: getMetricLabel(k), isPercent: true }))
@@ -937,41 +911,78 @@
       // 计算每个指标的TOP3
       const metricRankings = {};
       displayMetrics.forEach(m => {
-        const values = anchors.map(a => anchorGroups[a][m.key] || 0);
+        const values = keys.map(k => groups[k][m.key] || 0);
         const indexed = values.map((v, i) => ({ v, i })).filter(x => x.v > 0);
         indexed.sort((a, b) => b.v - a.v);
         metricRankings[m.key] = {};
-        indexed.slice(0, 3).forEach((item, rank) => { metricRankings[m.key][anchors[item.i]] = rank + 1; });
+        indexed.slice(0, 3).forEach((item, rank) => { metricRankings[m.key][keys[item.i]] = rank + 1; });
       });
       
+      // 状态显示
+      const statusEl = document.getElementById(statusId);
+      if (statusEl) {
+        statusEl.innerHTML = `筛选后 ${groupLabel} 数量: <strong>${keys.length}</strong>｜记录数: <strong>${filtered.length}</strong>｜${groupLabel}列表: ${keys.join(', ') || '无数据'}`;
+      }
+      
       // 渲染表头
-      const thead = document.getElementById('anchorTableHead');
-      let theadHtml = '<tr><th>主播 / 指标</th>';
-      anchors.forEach(anchor => {
-        const rank = metricRankings['netSales'] ? metricRankings['netSales'][anchor] : 0;
+      const thead = document.getElementById(headId);
+      let theadHtml = `<tr><th>${groupLabel} / 指标</th>`;
+      keys.forEach(key => {
+        const rank = metricRankings['netSales'] ? metricRankings['netSales'][key] : 0;
         const badge = showTop3 && rank ? `<span class="rank-badge">${['🥇','🥈','🥉'][rank-1]}</span>` : '';
-        theadHtml += `<th><div class="anchor-name">${badge}${anchor}</div></th>`;
+        theadHtml += `<th><div class="anchor-name">${badge}${key}</div></th>`;
       });
       theadHtml += '</tr>';
       thead.innerHTML = theadHtml;
       
       // 渲染表体
-      const tbody = document.getElementById('anchorTableBody');
+      const tbody = document.getElementById(bodyId);
       let tbodyHtml = '';
-      
       displayMetrics.forEach(metric => {
         tbodyHtml += `<tr><td>${metric.label}</td>`;
-        anchors.forEach(anchor => {
-          const g = anchorGroups[anchor];
-          const val = g[metric.key] || 0;
-          const rank = metricRankings[metric.key] ? metricRankings[metric.key][anchor] : 0;
+        keys.forEach(key => {
+          const val = groups[key][metric.key] || 0;
+          const rank = metricRankings[metric.key] ? metricRankings[metric.key][key] : 0;
           const topClass = showTop3 && rank ? `top-cell top-${rank}` : '';
           tbodyHtml += `<td class="${topClass}">${formatNumber(val, metric.isPercent)}</td>`;
         });
         tbodyHtml += '</tr>';
       });
-      
       tbody.innerHTML = tbodyHtml;
+    }
+    
+    // 渲染主播效率对比表（与所有筛选条件联动）
+    function renderAnchorTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      
+      const filtered = filterRecordsAll(records);
+      
+      renderCompareTable({
+        filtered,
+        groupField: 'anchor',
+        groupLabel: '主播',
+        headId: 'anchorTableHead',
+        bodyId: 'anchorTableBody',
+        statusId: 'anchorFilterStatus'
+      });
+    }
+    
+    // 渲染场控效率对比表（与所有筛选条件联动）
+    function renderSupervisorTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      
+      const filtered = filterRecordsAll(records);
+      
+      renderCompareTable({
+        filtered,
+        groupField: 'supervisor',
+        groupLabel: '场控',
+        headId: 'supervisorTableHead',
+        bodyId: 'supervisorTableBody',
+        statusId: 'supervisorFilterStatus'
+      });
     }
   </script>
 </body>
