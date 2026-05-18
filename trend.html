@@ -614,17 +614,36 @@
           groups[key].rawMetrics.adCost += r.adCost || 0;
           groups[key].rawMetrics.durationMin += r.durationMin || 0;
           groups[key].count++;
-          
-          // 累加绝对值指标
-          Y1_METRICS.forEach(m => {
-            if (!groups[key].metrics[m.key]) groups[key].metrics[m.key] = 0;
-            groups[key].metrics[m.key] += calculateMetric(r, m.key);
-          });
+          // 原始值已在 rawMetrics 中累加，指标在下方统一计算
         });
         
-        // 计算百分比指标
+        // 从聚合总量计算所有指标
         Object.keys(groups).forEach(key => {
           const raw = groups[key].rawMetrics;
+          const netSales = raw.sales - raw.refund;
+          const durationHour = raw.durationMin / 60;
+          
+          // 原始指标
+          groups[key].metrics.sales = raw.sales;
+          groups[key].metrics.refund = raw.refund;
+          groups[key].metrics.netSales = netSales;
+          groups[key].metrics.uv = raw.uv;
+          groups[key].metrics.exposureUsers = raw.exposureUsers;
+          groups[key].metrics.newFans = raw.newFans;
+          groups[key].metrics.buyers = raw.buyers;
+          groups[key].metrics.adCost = raw.adCost;
+          groups[key].metrics.durationMin = raw.durationMin;
+          
+          // 派生Y1指标（从聚合总量计算，而非逐条累加）
+          groups[key].metrics.hourlyGMV = durationHour > 0 ? raw.sales / durationHour : 0;
+          groups[key].metrics.hourlyGSV = durationHour > 0 ? netSales / durationHour : 0;
+          groups[key].metrics.hourlyUV = durationHour > 0 ? raw.uv / durationHour : 0;
+          groups[key].metrics.roiPre = raw.adCost > 0 ? raw.sales / raw.adCost : 0;
+          groups[key].metrics.roiPost = raw.adCost > 0 ? netSales / raw.adCost : 0;
+          groups[key].metrics.durationHour = durationHour;
+          groups[key].metrics.avgPrice = raw.buyers > 0 ? raw.sales / raw.buyers : 0;
+          
+          // 百分比Y2指标（从聚合总量计算）
           groups[key].metrics.refundRate = raw.sales > 0 ? raw.refund / raw.sales : 0;
           groups[key].metrics.cvr = raw.uv > 0 ? raw.buyers / raw.uv : 0;
           groups[key].metrics.uvRate = raw.exposureUsers > 0 ? raw.uv / raw.exposureUsers : 0;
