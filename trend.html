@@ -291,8 +291,19 @@
       supervisors: []
     };
     
+    // 对比指标格式映射（用于周期对比表）
+    const COMPARE_METRIC_FORMATS = {
+      sales: 'money', refund: 'money', netSales: 'money',
+      hourlyGMV: 'money', hourlyGSV: 'money',
+      roiPre: 'x', roiPost: 'x',
+      durationMin: 'num', durationHour: 'num',
+      uv: 'num', exposureUsers: 'num', newFans: 'num', buyers: 'num', adCost: 'money',
+      avgPrice: 'money', avgWatchMin: 'fixed1',
+      refundRate: 'pct', cvr: 'pct', uvRate: 'pct', fansRate: 'pct',
+      count: 'num'
+    };
+    
     // 时段筛选
-    let selectedTimeSlot = '';
     
     // 对比模式
     let enableCompare = false;
@@ -990,29 +1001,19 @@
       
       const { period1, period2 } = compareData;
       
-      // 对比指标列表（Y1+Y2中用户勾选的 + 关键派生指标）
-      const compareMetrics = [
-        { key: 'count', label: '直播场次', fmt: 'num' },
-        { key: 'sales', label: '销售额', fmt: 'money' },
-        { key: 'netSales', label: '净销售额', fmt: 'money' },
-        { key: 'refund', label: '退款金额', fmt: 'money' },
-        { key: 'refundRate', label: '退款率', fmt: 'pct' },
-        { key: 'adCost', label: '广告消耗', fmt: 'money' },
-        { key: 'roiPre', label: '退前ROI', fmt: 'x' },
-        { key: 'roiPost', label: '退后ROI', fmt: 'x' },
-        { key: 'hourlyGMV', label: '单小时GMV', fmt: 'money' },
-        { key: 'hourlyGSV', label: '单小时GSV', fmt: 'money' },
-        { key: 'uv', label: 'UV总计', fmt: 'num' },
-        { key: 'hourlyUV', label: '时均UV', fmt: 'num' },
-        { key: 'buyers', label: '成交人数', fmt: 'num' },
-        { key: 'cvr', label: '观看成交率', fmt: 'pct' },
-        { key: 'avgPrice', label: '客单价', fmt: 'money' },
-        { key: 'avgWatchMin', label: '人均观看时长(分钟)', fmt: 'fixed1' },
-        { key: 'newFans', label: '新增粉丝', fmt: 'num' },
-        { key: 'fansRate', label: '转粉率', fmt: 'pct' },
-        { key: 'durationMin', label: '直播时长(分钟)', fmt: 'num' },
-        { key: 'exposureUsers', label: '曝光人数', fmt: 'num' },
-      ];
+      // 对比指标列表：根据 Y1+Y2 勾选状态动态生成
+      // 合并所有已定义的指标对象
+      const allMetricDefs = [...Y1_METRICS, ...Y2_METRICS];
+      const selectedKeys = new Set([...selectedY1Metrics, ...selectedY2Metrics]);
+      // 始终显示直播场次
+      selectedKeys.add('count');
+      const compareMetrics = [];
+      selectedKeys.forEach(key => {
+        const def = allMetricDefs.find(m => m.key === key);
+        if (def) {
+          compareMetrics.push({ key: def.key, label: def.label, fmt: COMPARE_METRIC_FORMATS[def.key] || 'num' });
+        }
+      });
       
       const fmtVal = (v, fmt) => {
         if (fmt === 'money') return v >= 10000 ? '¥' + (v/10000).toFixed(2) + '万' : '¥' + Math.round(v);
