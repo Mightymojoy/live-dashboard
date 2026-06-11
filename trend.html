@@ -110,6 +110,17 @@
           <span>至</span>
           <input type="date" id="endDate">
         </div>
+        <div class="compare-section" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="enableCompare"> 对比
+          </label>
+          <div id="compareDateRange" style="display:none;align-items:center;gap:6px;" class="date-range">
+            <input type="date" id="startDate2">
+            <span>至</span>
+            <input type="date" id="endDate2">
+            <button id="runCompare" style="padding:4px 12px;border:1px solid #1890ff;background:#1890ff;color:#fff;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;">执行对比</button>
+          </div>
+        </div>
         <div class="time-slot-select">
           <select id="timeSlot">
             <option value="">全部时段</option>
@@ -185,6 +196,12 @@
           <div class="chart-container"><canvas id="chartY2"></canvas></div>
         </div>
       </div>
+    </div>
+    
+    <!-- 对比结果区（隐藏） -->
+    <div class="chart-section" id="compareResultSection" style="display:none;">
+      <h4 style="margin-bottom:12px;">📊 周期对比</h4>
+      <div id="compareTableContainer"></div>
     </div>
     
     <!-- 主播效率对比表（与全部筛选条件联动） -->
@@ -276,6 +293,10 @@
     
     // 时段筛选
     let selectedTimeSlot = '';
+    
+    // 对比模式
+    let enableCompare = false;
+    let compareData = null; // { period1: {metrics,...}, period2: {metrics,...} }
     
     // Y1轴指标（绝对值）
     const Y1_METRICS = [
@@ -594,6 +615,26 @@
     document.getElementById('startDate').addEventListener('change', updateChart);
     document.getElementById('endDate').addEventListener('change', updateChart);
     
+    // 对比模式事件
+    document.getElementById('enableCompare').addEventListener('change', (e) => {
+      enableCompare = e.target.checked;
+      document.getElementById('compareDateRange').style.display = enableCompare ? 'flex' : 'none';
+      // 自动填充对比日期：往前推相同天数
+      if (enableCompare) {
+        const s = document.getElementById('startDate').value;
+        const e = document.getElementById('endDate').value;
+        if (s && e) {
+          const days = Math.floor((new Date(e) - new Date(s)) / (86400000));
+          const s2 = new Date(new Date(s).getTime() - (days + 1) * 86400000);
+          const e2 = new Date(new Date(s).getTime() - 86400000);
+          document.getElementById('startDate2').value = s2.toISOString().split('T')[0];
+          document.getElementById('endDate2').value = e2.toISOString().split('T')[0];
+        }
+      }
+      updateChart();
+    });
+    document.getElementById('runCompare').addEventListener('click', updateChart);
+    
     // 计算指标值
     function calculateMetric(record, metricKey) {
       const sales = record.sales || 0;
@@ -890,9 +931,131 @@
         // 时段效率对比表
         renderTimeSlotTable();
         
+        // 周期对比
+        if (enableCompare) runComparison();
+        else {
+          document.getElementById('compareResultSection').style.display = 'none';
+        }
+        
       } catch (e) {
         console.error('图表更新失败:', e);
       }
+    }
+    
+    // 执行周期对比
+    function runComparison() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      const s1 = document.getElementById('startDate').value;
+      const e1 = document.getElementById('endDate').value;
+      const s2 = document.getElementById('startDate2').value;
+      const e2 = document.getElementById('endDate2').value;
+      if (!s1 || !e1 || !s2 || !e2) return;
+      
+      const p1 = filterRecordsAll(records);
+      const p2 = filterRecordsAll(records, parseDateInput(s2), parseDateInput(e2));
+      
+      if (p1.length === 0 && p2.length === 0) return;
+      
+      // 聚合两个周期的原始数据
+      const raw1 = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
+      const raw2 = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
+      
+      p1.forEach(r => {
+        raw1.sales += r.sales || 0; raw1.refund += r.refund || 0; raw1.uv += r.uv || 0;
+        raw1.newFans += r.newFans || 0; raw1.buyers += r.buyers || 0; raw1.adCost += r.adCost || 0;
+        raw1.durationMin += r.durationMin || 0; raw1.exposureUsers += r.exposureUsers || 0;
+        raw1.watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0); raw1.count++;
+      });
+      p2.forEach(r => {
+        raw2.sales += r.sales || 0; raw2.refund += r.refund || 0; raw2.uv += r.uv || 0;
+        raw2.newFans += r.newFans || 0; raw2.buyers += r.buyers || 0; raw2.adCost += r.adCost || 0;
+        raw2.durationMin += r.durationMin || 0; raw2.exposureUsers += r.exposureUsers || 0;
+        raw2.watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0); raw2.count++;
+      });
+      
+      const m1 = calcGroupMetrics(raw1);
+      const m2 = calcGroupMetrics(raw2);
+      
+      compareData = { period1: { raw: raw1, metrics: m1, label: formatDateShort(s1) + '~' + formatDateShort(e1) }, period2: { raw: raw2, metrics: m2, label: formatDateShort(s2) + '~' + formatDateShort(e2) } };
+      
+      renderCompareKpiTable();
+    }
+    
+    // 渲染 KPI 对比卡片表格
+    function renderCompareKpiTable() {
+      const container = document.getElementById('compareTableContainer');
+      if (!compareData) { container.innerHTML = ''; return; }
+      document.getElementById('compareResultSection').style.display = 'block';
+      
+      const { period1, period2 } = compareData;
+      
+      // 对比指标列表（Y1+Y2中用户勾选的 + 关键派生指标）
+      const compareMetrics = [
+        { key: 'count', label: '直播场次', fmt: 'num' },
+        { key: 'sales', label: '销售额', fmt: 'money' },
+        { key: 'netSales', label: '净销售额', fmt: 'money' },
+        { key: 'refund', label: '退款金额', fmt: 'money' },
+        { key: 'refundRate', label: '退款率', fmt: 'pct' },
+        { key: 'adCost', label: '广告消耗', fmt: 'money' },
+        { key: 'roiPre', label: '退前ROI', fmt: 'x' },
+        { key: 'roiPost', label: '退后ROI', fmt: 'x' },
+        { key: 'hourlyGMV', label: '单小时GMV', fmt: 'money' },
+        { key: 'hourlyGSV', label: '单小时GSV', fmt: 'money' },
+        { key: 'uv', label: 'UV总计', fmt: 'num' },
+        { key: 'hourlyUV', label: '时均UV', fmt: 'num' },
+        { key: 'buyers', label: '成交人数', fmt: 'num' },
+        { key: 'cvr', label: '观看成交率', fmt: 'pct' },
+        { key: 'avgPrice', label: '客单价', fmt: 'money' },
+        { key: 'avgWatchMin', label: '人均观看时长(分钟)', fmt: 'fixed1' },
+        { key: 'newFans', label: '新增粉丝', fmt: 'num' },
+        { key: 'fansRate', label: '转粉率', fmt: 'pct' },
+        { key: 'durationMin', label: '直播时长(分钟)', fmt: 'num' },
+        { key: 'exposureUsers', label: '曝光人数', fmt: 'num' },
+      ];
+      
+      const fmtVal = (v, fmt) => {
+        if (fmt === 'money') return v >= 10000 ? '¥' + (v/10000).toFixed(2) + '万' : '¥' + Math.round(v);
+        if (fmt === 'pct') return (v * 100).toFixed(2) + '%';
+        if (fmt === 'x') return v.toFixed(2) + 'x';
+        if (fmt === 'fixed1') return v.toFixed(1);
+        if (v >= 10000) return Math.round(v / 10000) + '万';
+        return Math.round(v).toLocaleString();
+      };
+      
+      let html = `<table class="anchor-table"><thead><tr>
+        <th style="text-align:left;min-width:120px;">指标</th>
+        <th>${period1.label}</th>
+        <th>${period2.label}</th>
+        <th style="min-width:90px;">变化</th>
+      </tr></thead><tbody>`;
+      
+      compareMetrics.forEach(m => {
+        const v1 = period1.metrics[m.key] || 0;
+        const v2 = period2.metrics[m.key] || 0;
+        const diff = v1 > 0 ? ((v2 - v1) / Math.abs(v1) * 100) : (v2 > 0 ? 100 : 0);
+        const diffStr = (diff > 0 ? '+' : '') + diff.toFixed(1) + '%';
+        const diffColor = diff > 0 ? '#f5222d' : diff < 0 ? '#52c41a' : '#999';
+        html += `<tr>
+          <td style="text-align:left;font-weight:500;">${m.label}</td>
+          <td style="font-weight:600;">${fmtVal(v1, m.fmt)}</td>
+          <td style="font-weight:600;">${fmtVal(v2, m.fmt)}</td>
+          <td style="color:${diffColor};font-weight:700;">${diffStr}</td>
+        </tr>`;
+      });
+      
+      html += `</tbody></table>`;
+      html += `<div style="margin-top:8px;font-size:12px;color:#999;text-align:right;">
+        绿色↓ = 下降(改善如退款率下降) / 红色↑ = 上升
+      </div>`;
+      
+      container.innerHTML = html;
+    }
+    
+    function formatDateShort(dateStr) {
+      if (!dateStr) return '';
+      const parts = dateStr.split('-');
+      return (parts[0] || '').slice(2) + '/' + (parts[1] || '') + '/' + (parts[2] || '');
     }
     
     // 渲染数据明细表
@@ -933,10 +1096,12 @@
       return `${year}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
     }
     
-    // 通用：按所有筛选条件过滤记录
-    function filterRecordsAll(records) {
-      const startFullDate = parseDateInput(document.getElementById('startDate').value);
-      const endFullDate = parseDateInput(document.getElementById('endDate').value);
+    // 通用：按所有筛选条件过滤记录（支持自定义日期范围）
+    function filterRecordsAll(records, customStartDate, customEndDate) {
+      const startEl = document.getElementById('startDate');
+      const endEl = document.getElementById('endDate');
+      const startFullDate = customStartDate || parseDateInput(startEl.value);
+      const endFullDate = customEndDate || parseDateInput(endEl.value);
       
       return records.filter(r => {
         if (!r.date || !r.yearMonth) return false;
