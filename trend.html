@@ -1035,7 +1035,7 @@
       compareMetrics.forEach(m => {
         const v1 = period1.metrics[m.key] || 0;
         const v2 = period2.metrics[m.key] || 0;
-        const diff = v1 > 0 ? ((v2 - v1) / Math.abs(v1) * 100) : (v2 > 0 ? 100 : 0);
+        const diff = v2 > 0 ? ((v1 / v2 - 1) * 100) : (v1 > 0 ? -100 : 0);
         const diffStr = (diff > 0 ? '+' : '') + diff.toFixed(1) + '%';
         const diffColor = diff > 0 ? '#f5222d' : diff < 0 ? '#52c41a' : '#999';
         html += `<tr>
