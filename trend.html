@@ -504,6 +504,22 @@
       dropdown.onmouseleave = () => setTimeout(() => { if (!dropdown.matches(':hover')) dropdown.classList.remove('show'); }, 200);
       document.addEventListener('click', (e) => { if (!container.contains(e.target)) dropdown.classList.remove('show'); });
       
+      // 添加全选按钮
+      let selectAllBtn = container.querySelector('.select-all-btn');
+      if (!selectAllBtn) {
+        selectAllBtn = document.createElement('button');
+        selectAllBtn.className = 'select-all-btn';
+        selectAllBtn.textContent = '全选';
+        selectAllBtn.style.cssText = 'margin-left:4px;padding:2px 10px;border:1px solid #1890ff;background:#e6f7ff;color:#1890ff;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0;';
+        input.parentNode.insertBefore(selectAllBtn, input.nextSibling);
+      }
+      selectAllBtn.onclick = () => {
+        filters[stateKey] = [...values];
+        renderTags();
+        renderOptions(searchInput.value);
+        updateChart();
+      };
+      
       renderOptions();
       renderTags();
     }
@@ -927,6 +943,21 @@
         groups[key] = calcGroupMetrics(groups[key]);
       });
       
+      // 计算汇总行（所有分组的总计）
+      const totalRaw = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0 };
+      Object.keys(groups).forEach(key => {
+        totalRaw.count += groups[key].count || 0;
+        totalRaw.sales += groups[key].sales || 0;
+        totalRaw.refund += groups[key].refund || 0;
+        totalRaw.uv += groups[key].uv || 0;
+        totalRaw.newFans += groups[key].newFans || 0;
+        totalRaw.buyers += groups[key].buyers || 0;
+        totalRaw.adCost += groups[key].adCost || 0;
+        totalRaw.durationMin += groups[key].durationMin || 0;
+        totalRaw.exposureUsers += groups[key].exposureUsers || 0;
+      });
+      const totalMetrics = calcGroupMetrics(totalRaw);
+      
       // 按净销售额排序
       const keys = Object.keys(groups).sort((a, b) => groups[b].netSales - groups[a].netSales);
       
@@ -961,6 +992,8 @@
         theadHtml += `<th><div class="anchor-name">${badge}${key}</div></th>`;
       });
       theadHtml += '</tr>';
+      // 添加汇总列头
+      theadHtml = theadHtml.replace('</tr>', '<th style="background:#fffbe6;color:#d48806;font-weight:700;position:sticky;right:0;z-index:3;">汇总</th></tr>');
       thead.innerHTML = theadHtml;
       
       // 渲染表体
@@ -974,6 +1007,8 @@
           const topClass = showTop3 && rank ? `top-cell top-${rank}` : '';
           tbodyHtml += `<td class="${topClass}">${formatNumber(val, metric.isPercent)}</td>`;
         });
+        const totalVal = totalMetrics[metric.key] || 0;
+        tbodyHtml += `<td style="background:#fffbe6;font-weight:700;">${formatNumber(totalVal, metric.isPercent)}</td>`;
         tbodyHtml += '</tr>';
       });
       tbody.innerHTML = tbodyHtml;
