@@ -504,17 +504,30 @@
       dropdown.onmouseleave = () => setTimeout(() => { if (!dropdown.matches(':hover')) dropdown.classList.remove('show'); }, 200);
       document.addEventListener('click', (e) => { if (!container.contains(e.target)) dropdown.classList.remove('show'); });
       
-      // 添加全选按钮
+      // 添加全选 + 清空按钮
       let selectAllBtn = container.querySelector('.select-all-btn');
+      let clearBtn = container.querySelector('.clear-filter-btn');
       if (!selectAllBtn) {
         selectAllBtn = document.createElement('button');
         selectAllBtn.className = 'select-all-btn';
         selectAllBtn.textContent = '全选';
         selectAllBtn.style.cssText = 'margin-left:4px;padding:2px 10px;border:1px solid #1890ff;background:#e6f7ff;color:#1890ff;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0;';
         input.parentNode.insertBefore(selectAllBtn, input.nextSibling);
+        // 清空按钮
+        clearBtn = document.createElement('button');
+        clearBtn.className = 'clear-filter-btn';
+        clearBtn.textContent = '清空';
+        clearBtn.style.cssText = 'margin-left:4px;padding:2px 10px;border:1px solid #ff4d4f;background:#fff2f0;color:#ff4d4f;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0;';
+        selectAllBtn.parentNode.insertBefore(clearBtn, selectAllBtn.nextSibling);
       }
       selectAllBtn.onclick = () => {
         filters[stateKey] = [...values];
+        renderTags();
+        renderOptions(searchInput.value);
+        updateChart();
+      };
+      clearBtn.onclick = () => {
+        filters[stateKey] = [];
         renderTags();
         renderOptions(searchInput.value);
         updateChart();
