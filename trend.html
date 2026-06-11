@@ -298,7 +298,7 @@
       roiPre: 'x', roiPost: 'x',
       durationMin: 'num', durationHour: 'num',
       uv: 'num', exposureUsers: 'num', newFans: 'num', buyers: 'num', adCost: 'money',
-      avgPrice: 'money', avgWatchMin: 'fixed1',
+      avgPrice: 'money', avgWatchMin: 'fixed2',
       refundRate: 'pct', cvr: 'pct', uvRate: 'pct', fansRate: 'pct',
       count: 'num'
     };
@@ -1021,6 +1021,7 @@
         if (fmt === 'pct') return (v * 100).toFixed(2) + '%';
         if (fmt === 'x') return v.toFixed(2) + 'x';
         if (fmt === 'fixed1') return v.toFixed(1);
+      if (fmt === 'fixed2') return v.toFixed(2);
         if (v >= 10000) return Math.round(v / 10000) + '万';
         return Math.round(v).toLocaleString();
       };
