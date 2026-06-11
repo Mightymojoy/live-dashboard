@@ -211,6 +211,42 @@
       </div>
     </div>
     
+    <!-- 平台活动效率对比表 -->
+    <div class="data-table-section">
+      <h4>🏷️ 平台活动效率对比表</h4>
+      <div id="platformFilterStatus" style="background:#fff3e0;color:#e65100;padding:8px 12px;margin-bottom:10px;border-radius:4px;font-size:12px;"></div>
+      <div class="anchor-table-wrapper">
+        <table class="anchor-table">
+          <thead id="platformTableHead"></thead>
+          <tbody id="platformTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- 直播活动效率对比表 -->
+    <div class="data-table-section">
+      <h4>📺 直播活动效率对比表</h4>
+      <div id="liveFilterStatus" style="background:#e3f2fd;color:#1565c0;padding:8px 12px;margin-bottom:10px;border-radius:4px;font-size:12px;"></div>
+      <div class="anchor-table-wrapper">
+        <table class="anchor-table">
+          <thead id="liveTableHead"></thead>
+          <tbody id="liveTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- 时段效率对比表 -->
+    <div class="data-table-section">
+      <h4>⏰ 时段效率对比表</h4>
+      <div id="timeSlotFilterStatus" style="background:#f3e5f5;color:#7b1fa2;padding:8px 12px;margin-bottom:10px;border-radius:4px;font-size:12px;"></div>
+      <div class="anchor-table-wrapper">
+        <table class="anchor-table">
+          <thead id="timeSlotTableHead"></thead>
+          <tbody id="timeSlotTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+    
     <!-- 数据明细表格 -->
     <div class="data-table-section" id="dataTableSection" style="display:none;">
       <h4>📋 数据明细</h4>
@@ -844,6 +880,13 @@
         // 场控效率对比表
         renderSupervisorTable();
         
+        // 平台活动效率对比表
+        renderPlatformTable();
+        // 直播活动效率对比表
+        renderLiveTable();
+        // 时段效率对比表
+        renderTimeSlotTable();
+        
       } catch (e) {
         console.error('图表更新失败:', e);
       }
@@ -1058,6 +1101,51 @@
         headId: 'supervisorTableHead',
         bodyId: 'supervisorTableBody',
         statusId: 'supervisorFilterStatus'
+      });
+    }
+    
+    // 渲染平台活动效率对比表
+    function renderPlatformTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      const filtered = filterRecordsAll(records);
+      renderCompareTable({
+        filtered,
+        groupField: 'platformActivity',
+        groupLabel: '平台活动',
+        headId: 'platformTableHead',
+        bodyId: 'platformTableBody',
+        statusId: 'platformFilterStatus'
+      });
+    }
+    
+    // 渲染直播活动效率对比表
+    function renderLiveTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      const filtered = filterRecordsAll(records);
+      renderCompareTable({
+        filtered,
+        groupField: 'liveActivity',
+        groupLabel: '直播活动',
+        headId: 'liveTableHead',
+        bodyId: 'liveTableBody',
+        statusId: 'liveFilterStatus'
+      });
+    }
+    
+    // 渲染时段效率对比表
+    function renderTimeSlotTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      const filtered = filterRecordsAll(records);
+      renderCompareTable({
+        filtered,
+        groupField: 'timeSlot',
+        groupLabel: '时段',
+        headId: 'timeSlotTableHead',
+        bodyId: 'timeSlotTableBody',
+        statusId: 'timeSlotFilterStatus'
       });
     }
   </script>
