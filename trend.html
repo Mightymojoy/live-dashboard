@@ -1062,6 +1062,32 @@
             if (cells[colIdx]) cells[colIdx].style.display = hidden ? 'none' : '';
           });
         });
+        // 根据可见列动态更新汇总行
+        updateSummaryForVisible(headId, stateKey);
+      }
+      
+      // 根据可见列动态更新汇总行
+      function updateSummaryForVisible(headId, stateKey) {
+        const tableData = window.__tableData && window.__tableData[stateKey];
+        if (!tableData) return;
+        const state = window.tableColState[stateKey];
+        const visibleKeys = tableData.keys.filter(k => state[k] !== false);
+        if (visibleKeys.length === 0) return;
+        const visibleRecords = tableData.filtered.filter(r => visibleKeys.includes(r[tableData.groupField]));
+        const visibleTotal = calcGroupMetrics(visibleRecords);
+        const thead = document.getElementById(headId);
+        if (!thead) return;
+        const table = thead.closest('table');
+        const rows = table.querySelectorAll('tbody tr');
+        const lastColIdx = tableData.keys.length + 1; // 汇总列索引
+        rows.forEach((row, ri) => {
+          const cells = row.querySelectorAll('td');
+          const metric = displayMetrics[ri];
+          if (cells[lastColIdx] && metric) {
+            const val = visibleTotal[metric.key] || 0;
+            cells[lastColIdx].textContent = formatNumber(val, metric.isPercent);
+          }
+        });
       }
       
       // 重置所有列显示
@@ -1071,6 +1097,8 @@
         if (!thead) return;
         const table = thead.closest('table');
         table.querySelectorAll('thead th, tbody td').forEach(el => el.style.display = '');
+        // 恢复为全量汇总
+        updateSummaryForVisible(headId, stateKey);
       }
       const statusEl = document.getElementById(statusId);
       if (statusEl) {
@@ -1132,6 +1160,10 @@
         tbodyHtml += '</tr>';
       });
       tbody.innerHTML = tbodyHtml;
+      
+      // 存储分组数据以便列切换时动态更新汇总
+      window.__tableData = window.__tableData || {};
+      window.__tableData[stateKey] = { groups, keys, filtered, groupField };
     }
     
     // 渲染主播效率对比表（与所有筛选条件联动）
