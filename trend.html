@@ -990,11 +990,12 @@
       
       compareData = { period1: { raw: raw1, metrics: m1, label: formatDateShort(s1) + '~' + formatDateShort(e1) }, period2: { raw: raw2, metrics: m2, label: formatDateShort(s2) + '~' + formatDateShort(e2) } };
       
-      renderCompareKpiTable();
+      // 将当前选中的 Y1+Y2 指标透传给渲染函数，确保最新勾选状态
+      renderCompareKpiTable([...selectedY1Metrics, ...selectedY2Metrics]);
     }
     
     // 渲染 KPI 对比卡片表格
-    function renderCompareKpiTable() {
+    function renderCompareKpiTable(selectedMetricKeys) {
       const container = document.getElementById('compareTableContainer');
       if (!compareData) { container.innerHTML = ''; return; }
       document.getElementById('compareResultSection').style.display = 'block';
@@ -1002,9 +1003,9 @@
       const { period1, period2 } = compareData;
       
       // 对比指标列表：根据 Y1+Y2 勾选状态动态生成
-      // 合并所有已定义的指标对象
+      const keys = selectedMetricKeys || [...selectedY1Metrics, ...selectedY2Metrics];
       const allMetricDefs = [...Y1_METRICS, ...Y2_METRICS];
-      const selectedKeys = new Set([...selectedY1Metrics, ...selectedY2Metrics]);
+      const selectedKeys = new Set(keys);
       // 始终显示直播场次
       selectedKeys.add('count');
       const compareMetrics = [];
