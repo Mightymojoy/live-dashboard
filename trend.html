@@ -1033,45 +1033,58 @@
         indexed.slice(0, 3).forEach((item, rank) => { metricRankings[m.key][keys[item.i]] = rank + 1; });
       });
       
-      // 搜索表格列（隐藏/显示不匹配的列）
-    function filterTableColumns(headId, searchTerm) {
-      const s = searchTerm.trim();
-      const table = document.getElementById(headId) ? document.getElementById(headId).closest('table') : null;
-      if (!table) return;
-      const headers = table.querySelectorAll('thead th');
-      const rows = table.querySelectorAll('tbody tr');
+      // 列显示状态
+      if (!window.tableColState) window.tableColState = {};
+      const stateKey = `${currentShop}_${headId}`;
+      if (!window.tableColState[stateKey]) window.tableColState[stateKey] = {};
+      const colState = window.tableColState[stateKey];
       
-      headers.forEach((th, idx) => {
-        if (idx === 0 || idx >= headers.length - 1) return; // 跳过第1列（指标名）和最后1列（汇总）
-        const text = th.textContent.trim().replace(/[🥇🥈🥉]/g, '').toLowerCase();
-        const match = !s || text.includes(s.toLowerCase());
-        th.style.display = match ? '' : 'none';
-        rows.forEach(row => {
-          const cells = row.querySelectorAll('td');
-          if (cells[idx]) cells[idx].style.display = match ? '' : 'none';
+      // 切换单列显示/隐藏
+      function toggleTableColumn(headId, colKey, stateKey, keys) {
+        const state = window.tableColState[stateKey];
+        if (state[colKey] === false) {
+          delete state[colKey]; // 恢复显示
+        } else {
+          state[colKey] = false; // 隐藏
+        }
+        // 按列索引重新应用状态
+        const thead = document.getElementById(headId);
+        if (!thead) return;
+        const table = thead.closest('table');
+        keys.forEach((key, idx) => {
+          const colIdx = idx + 1; // +1 跳过了第1列（指标名）
+          const hidden = state[key] === false;
+          const headers = table.querySelectorAll('thead th');
+          const rows = table.querySelectorAll('tbody tr');
+          if (headers[colIdx]) headers[colIdx].style.display = hidden ? 'none' : '';
+          rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells[colIdx]) cells[colIdx].style.display = hidden ? 'none' : '';
+          });
         });
-      });
-    }
+      }
+      
+      // 重置所有列显示
+      function resetTableColumns(headId, stateKey) {
+        window.tableColState[stateKey] = {};
+        const thead = document.getElementById(headId);
+        if (!thead) return;
+        const table = thead.closest('table');
+        table.querySelectorAll('thead th, tbody td').forEach(el => el.style.display = '');
+      }
       const statusEl = document.getElementById(statusId);
       if (statusEl) {
         statusEl.innerHTML = `筛选后 ${groupLabel} 数量: <strong>${keys.length}</strong>｜记录数: <strong>${filtered.length}</strong>｜${groupLabel}列表: ${keys.join(', ') || '无数据'}`;
-        // 添加/更新搜索输入框
-        let filterInput = document.querySelector(`[data-table-filter="${headId}"]`);
-        if (!filterInput) {
-          filterInput = document.createElement('input');
-          filterInput.type = 'text';
-          filterInput.placeholder = `🔍 筛选${groupLabel}（输入关键词隐藏不匹配列）`;
-          filterInput.dataset.tableFilter = headId;
-          filterInput.style.cssText = 'margin:6px 0;padding:4px 8px;border:1px solid #d9d9d9;border-radius:4px;font-size:12px;width:240px;outline:none;box-sizing:border-box;';
-          filterInput.addEventListener('input', function() {
-            filterTableColumns(headId, this.value);
-          });
-          statusEl.parentNode.insertBefore(filterInput, statusEl.nextSibling);
-        }
-        filterInput.value = filterInput.value || '';
-        // 重新渲染后恢复筛选状态
-        if (filterInput.value) {
-          filterTableColumns(headId, filterInput.value);
+        // 添加重置列按钮（替换之前的搜索框）
+        let resetBtn = document.querySelector(`[data-table-reset="${headId}"]`);
+        if (!resetBtn) {
+          resetBtn = document.createElement('button');
+          resetBtn.dataset.tableReset = headId;
+          resetBtn.textContent = '重置列';
+          resetBtn.title = '恢复所有隐藏的列';
+          resetBtn.style.cssText = 'margin:6px 0 6px 8px;padding:3px 10px;border:1px solid #d48806;background:#fffbe6;color:#d48806;border-radius:4px;cursor:pointer;font-size:12px;';
+          resetBtn.addEventListener('click', () => resetTableColumns(headId, stateKey));
+          statusEl.parentNode.insertBefore(resetBtn, statusEl.nextSibling);
         }
       }
       
@@ -1087,6 +1100,21 @@
       // 添加汇总列头
       theadHtml = theadHtml.replace('</tr>', '<th style="background:#fffbe6;color:#d48806;font-weight:700;position:sticky;right:0;z-index:3;">汇总</th></tr>');
       thead.innerHTML = theadHtml;
+      
+      // 列头点击切换显示/隐藏
+      thead.querySelectorAll('th:not(:first-child):not(:last-child)').forEach((th, i) => {
+        const key = keys[i];
+        th.style.cursor = 'pointer';
+        th.title = '点击切换显示/隐藏此列';
+        th.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleTableColumn(headId, key, stateKey, keys);
+        });
+        // 恢复之前的隐藏状态
+        if (colState[key] === false) {
+          th.style.display = 'none';
+        }
+      });
       
       // 渲染表体
       const tbody = document.getElementById(bodyId);
