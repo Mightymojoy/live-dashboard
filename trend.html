@@ -294,7 +294,8 @@
       { key: 'newFans', label: '新增粉丝数' },
       { key: 'buyers', label: '成交人数' },
       { key: 'adCost', label: '广告消耗' },
-      { key: 'avgPrice', label: '客单价' }
+      { key: 'avgPrice', label: '客单价' },
+      { key: 'avgWatchMin', label: '人均观看时长(分钟)' }
     ];
     
     // Y2轴指标（百分比）
@@ -666,7 +667,7 @@
           else key = r.date ? dataYear + '年' : '';
           
           if (!groups[key]) {
-            groups[key] = { count: 0, metrics: {}, rawMetrics: { sales: 0, refund: 0, uv: 0, buyers: 0, newFans: 0, exposureUsers: 0, adCost: 0, durationMin: 0 } };
+            groups[key] = { count: 0, metrics: {}, rawMetrics: { sales: 0, refund: 0, uv: 0, buyers: 0, newFans: 0, exposureUsers: 0, adCost: 0, durationMin: 0, watchMinTotal: 0 } };
           }
           
           // 累加原始值（用于计算百分比）
@@ -678,6 +679,7 @@
           groups[key].rawMetrics.exposureUsers += r.exposureUsers || 0;
           groups[key].rawMetrics.adCost += r.adCost || 0;
           groups[key].rawMetrics.durationMin += r.durationMin || 0;
+          groups[key].rawMetrics.watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0);
           groups[key].count++;
           // 原始值已在 rawMetrics 中累加，指标在下方统一计算
         });
@@ -707,6 +709,7 @@
           groups[key].metrics.roiPost = raw.adCost > 0 ? netSales / raw.adCost : 0;
           groups[key].metrics.durationHour = durationHour;
           groups[key].metrics.avgPrice = raw.buyers > 0 ? raw.sales / raw.buyers : 0;
+          groups[key].metrics.avgWatchMin = raw.watchMinTotal > 0 && raw.uv > 0 ? raw.watchMinTotal / raw.uv : 0;
           
           // 百分比Y2指标（从聚合总量计算）
           groups[key].metrics.refundRate = raw.sales > 0 ? raw.refund / raw.sales : 0;
@@ -969,6 +972,7 @@
       g.uvRate = g.exposureUsers > 0 ? g.uv / g.exposureUsers : 0;
       g.fansRate = g.uv > 0 ? g.newFans / g.uv : 0;
       g.avgPrice = g.buyers > 0 ? g.sales / g.buyers : 0;
+      g.avgWatchMin = g.uv > 0 ? g.watchMinTotal / g.uv : 0;
       return g;
     }
     
@@ -981,7 +985,7 @@
       filtered.forEach(r => {
         const key = r[groupField] || ('未知' + groupLabel);
         if (!groups[key]) {
-          groups[key] = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0 };
+          groups[key] = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
         }
         groups[key].count++;
         groups[key].sales += r.sales || 0;
@@ -992,6 +996,7 @@
         groups[key].adCost += r.adCost || 0;
         groups[key].durationMin += r.durationMin || 0;
         groups[key].exposureUsers += r.exposureUsers || 0;
+        groups[key].watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0);
       });
       
       // 计算衍生指标
@@ -1000,7 +1005,7 @@
       });
       
       // 计算汇总行（所有分组的总计）
-      const totalRaw = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0 };
+      const totalRaw = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
       Object.keys(groups).forEach(key => {
         totalRaw.count += groups[key].count || 0;
         totalRaw.sales += groups[key].sales || 0;
@@ -1011,6 +1016,7 @@
         totalRaw.adCost += groups[key].adCost || 0;
         totalRaw.durationMin += groups[key].durationMin || 0;
         totalRaw.exposureUsers += groups[key].exposureUsers || 0;
+        totalRaw.watchMinTotal += groups[key].watchMinTotal || 0;
       });
       const totalMetrics = calcGroupMetrics(totalRaw);
       
@@ -1076,7 +1082,7 @@
         // 筛选可见组的记录
         const visibleRecords = tableData.filtered.filter(r => visibleKeys.includes(r[tableData.groupField]));
         // 先聚合原始数值，再调用 calcGroupMetrics 计算派生指标
-        const totalRaw = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0 };
+        const totalRaw = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
         visibleRecords.forEach(r => {
           totalRaw.sales += r.sales || 0;
           totalRaw.refund += r.refund || 0;
@@ -1086,6 +1092,7 @@
           totalRaw.adCost += r.adCost || 0;
           totalRaw.durationMin += r.durationMin || 0;
           totalRaw.exposureUsers += r.exposureUsers || 0;
+          totalRaw.watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0);
           totalRaw.count += 1;
         });
         const visibleTotal = calcGroupMetrics(totalRaw);
