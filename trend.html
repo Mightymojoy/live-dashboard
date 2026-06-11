@@ -1073,8 +1073,22 @@
         const state = window.tableColState[stateKey];
         const visibleKeys = tableData.keys.filter(k => state[k] !== false);
         if (visibleKeys.length === 0) return;
+        // 筛选可见组的记录
         const visibleRecords = tableData.filtered.filter(r => visibleKeys.includes(r[tableData.groupField]));
-        const visibleTotal = calcGroupMetrics(visibleRecords);
+        // 先聚合原始数值，再调用 calcGroupMetrics 计算派生指标
+        const totalRaw = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0 };
+        visibleRecords.forEach(r => {
+          totalRaw.sales += r.sales || 0;
+          totalRaw.refund += r.refund || 0;
+          totalRaw.uv += r.uv || 0;
+          totalRaw.newFans += r.newFans || 0;
+          totalRaw.buyers += r.buyers || 0;
+          totalRaw.adCost += r.adCost || 0;
+          totalRaw.durationMin += r.durationMin || 0;
+          totalRaw.exposureUsers += r.exposureUsers || 0;
+          totalRaw.count += 1;
+        });
+        const visibleTotal = calcGroupMetrics(totalRaw);
         const thead = document.getElementById(headId);
         if (!thead) return;
         const table = thead.closest('table');
@@ -1082,7 +1096,7 @@
         const lastColIdx = tableData.keys.length + 1; // 汇总列索引
         rows.forEach((row, ri) => {
           const cells = row.querySelectorAll('td');
-          const metric = displayMetrics[ri];
+          const metric = tableData.displayMetrics[ri];
           if (cells[lastColIdx] && metric) {
             const val = visibleTotal[metric.key] || 0;
             cells[lastColIdx].textContent = formatNumber(val, metric.isPercent);
@@ -1163,7 +1177,7 @@
       
       // 存储分组数据以便列切换时动态更新汇总
       window.__tableData = window.__tableData || {};
-      window.__tableData[stateKey] = { groups, keys, filtered, groupField };
+      window.__tableData[stateKey] = { groups, keys, filtered, groupField, displayMetrics };
     }
     
     // 渲染主播效率对比表（与所有筛选条件联动）
