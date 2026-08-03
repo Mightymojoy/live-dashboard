@@ -124,10 +124,6 @@
         <div class="time-slot-select">
           <select id="timeSlot">
             <option value="">全部时段</option>
-            <option value="早">早</option>
-            <option value="中">中</option>
-            <option value="晚">晚</option>
-            <option value="全天">全天</option>
           </select>
         </div>
         <div class="search-multi" id="anchorFilter">
@@ -480,8 +476,19 @@
       filters.liveActivities = [];
       filters.supervisors = [];
       selectedTimeSlot = '';
-      document.getElementById('timeSlot').value = '';
-      
+
+      // 动态填充时段选项（从实际数据中提取去重值）
+      const timeSlotSelect = document.getElementById('timeSlot');
+      timeSlotSelect.innerHTML = '<option value="">全部时段</option>';
+      const timeSlotValues = [...new Set(records.map(r => r.timeSlot).filter(v => v != null && v !== '').map(v => String(v).trim()))].filter(v => v).sort();
+      timeSlotValues.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        timeSlotSelect.appendChild(opt);
+      });
+      timeSlotSelect.value = '';
+
       initSearchMulti('anchorFilter', 'anchors', records, 'anchor');
       initSearchMulti('platformFilter', 'platformActivities', records, 'platformActivity');
       initSearchMulti('liveFilter', 'liveActivities', records, 'liveActivity');
