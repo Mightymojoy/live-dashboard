@@ -1,0 +1,1191 @@
+
+    // 全局变量
+    let allData = {};
+    let currentShop = '';
+    let timeMode = 'day';
+    let selectedY1Metrics = ['sales', 'refund', 'netSales'];
+    let selectedY2Metrics = ['refundRate', 'cvr'];
+    let showTop3 = true;
+    let showAvg = false;
+    let showTable = false;
+    let chartY1 = null;
+    let chartY2 = null;
+    
+    const filters = {
+      anchors: [],
+      platformActivities: [],
+      liveActivities: [],
+      supervisors: []
+    };
+    
+    // 对比指标格式映射（用于周期对比表）
+    const COMPARE_METRIC_FORMATS = {
+      sales: 'money', refund: 'money', netSales: 'money',
+      hourlyGMV: 'money', hourlyGSV: 'money',
+      roiPre: 'x', roiPost: 'x',
+      durationMin: 'num', durationHour: 'num',
+      uv: 'num', exposureUsers: 'num', newFans: 'num', buyers: 'num', adCost: 'money',
+      avgPrice: 'money', avgWatchMin: 'fixed2',
+      refundRate: 'pct', cvr: 'pct', uvRate: 'pct', fansRate: 'pct',
+      count: 'num'
+    };
+    
+    // 时段筛选
+    
+    // 对比模式
+    let enableCompare = false;
+    let compareData = null; // { period1: {metrics,...}, period2: {metrics,...} }
+    
+    // Y1轴指标（绝对值）
+    const Y1_METRICS = [
+      { key: 'sales', label: '销售额' },
+      { key: 'refund', label: '退款金额' },
+      { key: 'netSales', label: '净销售额' },
+      { key: 'hourlyGMV', label: '单小时GMV' },
+      { key: 'hourlyGSV', label: '单小时GSV' },
+      { key: 'hourlyUV', label: '时均UV' },
+      { key: 'roiPre', label: '退前ROI' },
+      { key: 'roiPost', label: '退后ROI' },
+      { key: 'durationMin', label: '直播时长(分钟)' },
+      { key: 'durationHour', label: '直播时长(H)' },
+      { key: 'uv', label: 'UV总计' },
+      { key: 'exposureUsers', label: '曝光人数' },
+      { key: 'newFans', label: '新增粉丝数' },
+      { key: 'buyers', label: '成交人数' },
+      { key: 'adCost', label: '广告消耗' },
+      { key: 'avgPrice', label: '客单价' },
+      { key: 'avgWatchMin', label: '人均观看时长(分钟)' }
+    ];
+    
+    // Y2轴指标（百分比）
+    const Y2_METRICS = [
+      { key: 'refundRate', label: '退款率' },
+      { key: 'cvr', label: '观看成交率' },
+      { key: 'uvRate', label: '曝光观看率' },
+      { key: 'fansRate', label: '转粉率' }
+    ];
+    
+    // Y1 轴（柱状/绝对值）：品牌金色系
+    const METRIC_COLORS = [
+      '#c9a962', '#b08a3c', '#d8b979', '#9a7b3f', '#e0c080',
+      '#8a6a2e', '#c9b27a', '#7a5f2e', '#d6c08e', '#a8874a'
+    ];
+    // Y2 轴（折线/百分比）：茶青冷色系（与金色形成强对比，用于双轴区分）
+    const METRIC_COLORS_Y2 = [
+      '#4e7d6e', '#3f6a5d', '#5d8a7f', '#2f5348', '#7ba396',
+      '#38614f', '#6a9185', '#2c4a40', '#8fb0a5', '#4a6f63'
+    ];
+    
+    // 渲染 Lucide 图标
+    if (typeof lucide !== "undefined") lucide.createIcons();
+
+    // 数据加载
+    fetch('./live_data.json')
+      .then(r => r.json())
+      .then(data => {
+        allData = data;
+        console.log('【DEBUG】数据加载完成，店铺列表:', Object.keys(allData));
+        
+        // 打印每个店铺的日期和主播示例
+        Object.keys(allData).forEach(shop => {
+          const records = allData[shop] || [];
+          const dates = [...new Set(records.map(r => r.date).filter(Boolean))].sort();
+          const anchors = [...new Set(records.map(r => r.anchor).filter(Boolean))];
+          console.log(`【DEBUG】${shop}: 共${records.length}条记录`);
+          console.log(`  日期范围: ${dates[0]} ~ ${dates[dates.length-1]}`);
+          console.log(`  主播列表: ${anchors.join(', ')}`);
+          if (dates.length > 0) {
+            console.log(`  日期示例(前5个): ${dates.slice(0, 5).join(', ')}`);
+          }
+        });
+        
+        const shops = Object.keys(allData);
+        if (shops.length > 0) currentShop = shops[0];
+        initTabs();
+        initMetrics();
+        initFilters();
+        updateChart();
+      })
+      .catch(e => {
+        document.body.innerHTML = `<div class="error">数据加载失败: ${e.message}</div>`;
+      });
+    
+    // 初始化Tab
+    function initTabs() {
+      const container = document.getElementById('shopTabs');
+      container.innerHTML = '';
+      Object.keys(allData).forEach(shop => {
+        const tab = document.createElement('button');
+        tab.className = 'tab' + (shop === currentShop ? ' active' : '');
+        tab.textContent = shop;
+        tab.onclick = () => {
+          currentShop = shop;
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          initFilters();
+          updateChart();
+        };
+        container.appendChild(tab);
+      });
+    }
+    
+    // 初始化指标选择
+    function initMetrics() {
+      const y1Container = document.getElementById('y1Metrics');
+      const y2Container = document.getElementById('y2Metrics');
+      
+      y1Container.innerHTML = Y1_METRICS.map(m => `
+        <label class="metric-checkbox ${selectedY1Metrics.includes(m.key) ? 'checked' : ''}">
+          <input type="checkbox" value="${m.key}" ${selectedY1Metrics.includes(m.key) ? 'checked' : ''}>
+          ${m.label}
+        </label>
+      `).join('');
+      
+      y2Container.innerHTML = Y2_METRICS.map(m => `
+        <label class="metric-checkbox ${selectedY2Metrics.includes(m.key) ? 'checked' : ''}">
+          <input type="checkbox" value="${m.key}" ${selectedY2Metrics.includes(m.key) ? 'checked' : ''}>
+          ${m.label}
+        </label>
+      `).join('');
+      
+      document.querySelectorAll('#y1Metrics input').forEach(cb => {
+        cb.onchange = () => {
+          if (cb.checked) { if (!selectedY1Metrics.includes(cb.value)) selectedY1Metrics.push(cb.value); }
+          else { selectedY1Metrics = selectedY1Metrics.filter(v => v !== cb.value); }
+          updateMetricStyle();
+          updateChart();
+        };
+      });
+      
+      document.querySelectorAll('#y2Metrics input').forEach(cb => {
+        cb.onchange = () => {
+          if (cb.checked) { if (!selectedY2Metrics.includes(cb.value)) selectedY2Metrics.push(cb.value); }
+          else { selectedY2Metrics = selectedY2Metrics.filter(v => v !== cb.value); }
+          updateMetricStyle();
+          updateChart();
+        };
+      });
+      
+      document.getElementById('showTop3').onchange = (e) => { showTop3 = e.target.checked; updateChart(); };
+      document.getElementById('showAvg').onchange = (e) => { showAvg = e.target.checked; updateChart(); };
+      document.getElementById('showTable').onchange = (e) => {
+        showTable = e.target.checked;
+        document.getElementById('dataTableSection').style.display = showTable ? 'block' : 'none';
+        updateChart();
+      };
+      
+      updateMetricStyle();
+    }
+    
+    function updateMetricStyle() {
+      document.querySelectorAll('#y1Metrics .metric-checkbox').forEach(el => el.classList.toggle('checked', el.querySelector('input').checked));
+      document.querySelectorAll('#y2Metrics .metric-checkbox').forEach(el => el.classList.toggle('checked', el.querySelector('input').checked));
+    }
+    
+    // 初始化筛选器
+    function initFilters() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      
+      // 获取所有年份并取最新年份（修复：之前用了 years[0] 导致默认日期范围全是旧年）
+      const years = [...new Set(records.map(r => r.yearMonth ? r.yearMonth.substring(0, 4) : '2023'))];
+      const yearNums = years.map(y => parseInt(y)).filter(y => !isNaN(y));
+      const latestYear = Math.max(...yearNums).toString();
+      const latestYearStr = latestYear || '2026';
+
+      // 从最新年份的 yearMonth 中筛选出最新月份的数据，确定默认日期范围
+      const latestYearRecords = records.filter(r => r.yearMonth && r.yearMonth.startsWith(latestYearStr));
+      const dates = [...new Set(latestYearRecords.map(r => r.date).filter(Boolean))].sort();
+
+      // 如果没有最新年份数据，回退到所有记录
+      const allDates = dates.length > 0 ? dates : records.map(r => r.date).filter(Boolean).sort();
+      const firstDate = allDates[0] || '01-01';
+      const lastDate = allDates[allDates.length - 1] || '12-31';
+
+      const startInput = document.getElementById('startDate');
+      const endInput = document.getElementById('endDate');
+
+      const [sm, sd] = firstDate.split('-');
+      startInput.value = `${latestYearStr}-${sm.padStart(2, '0')}-${sd.padStart(2, '0')}`;
+
+      const [em, ed] = lastDate.split('-');
+      endInput.value = `${latestYearStr}-${em.padStart(2, '0')}-${ed.padStart(2, '0')}`;
+      
+      filters.anchors = [];
+      filters.platformActivities = [];
+      filters.liveActivities = [];
+      filters.supervisors = [];
+      selectedTimeSlot = '';
+
+      // 动态填充时段选项（从实际数据中提取去重值）
+      const timeSlotSelect = document.getElementById('timeSlot');
+      timeSlotSelect.innerHTML = '<option value="">全部时段</option>';
+      const timeSlotValues = [...new Set(records.map(r => r.timeSlot).filter(v => v != null && v !== '').map(v => String(v).trim()))].filter(v => v).sort();
+      timeSlotValues.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        timeSlotSelect.appendChild(opt);
+      });
+      timeSlotSelect.value = '';
+
+      initSearchMulti('anchorFilter', 'anchors', records, 'anchor');
+      initSearchMulti('platformFilter', 'platformActivities', records, 'platformActivity');
+      initSearchMulti('liveFilter', 'liveActivities', records, 'liveActivity');
+      initSearchMulti('supervisorFilter', 'supervisors', records, 'supervisor');
+    }
+    
+    // 搜索多选组件
+    function initSearchMulti(containerId, stateKey, records, field) {
+      const container = document.getElementById(containerId);
+      const input = container.querySelector('.search-multi-input');
+      const dropdown = container.querySelector('.search-multi-dropdown');
+      const tagsContainer = container.querySelector('.selected-tags');
+      const searchInput = dropdown.querySelector('input[type="text"]');
+      const optionsList = dropdown.querySelector('.options-list');
+      
+      const values = [...new Set(records.map(r => r[field]).filter(v => v != null && v !== '').map(v => String(v).trim()))].filter(v => v).sort();
+      
+      function renderOptions(filter = '') {
+        filter = filter.toLowerCase();
+        let filtered = values.filter(v => String(v).toLowerCase().includes(filter));
+        if (filter && !values.some(v => v.toLowerCase() === filter)) {
+          filtered.unshift(`__custom__${filter}`);
+        }
+        
+        optionsList.innerHTML = filtered.map(v => {
+          const value = v.startsWith('__custom__') ? v.replace('__custom__', '') : v;
+          const isCustom = v.startsWith('__custom__');
+          const isSelected = filters[stateKey].includes(value);
+          return `<div class="search-multi-option ${isSelected ? 'selected' : ''}" data-value="${value}" data-custom="${isCustom}">
+            <input type="checkbox" ${isSelected ? 'checked' : ''}> ${isCustom ? `<b>+"${value}"</b>` : value}
+          </div>`;
+        }).join('');
+        
+        optionsList.querySelectorAll('.search-multi-option').forEach(opt => {
+          opt.onclick = (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            const cb = opt.querySelector('input');
+            cb.checked = !cb.checked;
+            const value = opt.dataset.value;
+            if (cb.checked) { if (!filters[stateKey].includes(value)) filters[stateKey].push(value); }
+            else { filters[stateKey] = filters[stateKey].filter(v => v !== value); }
+            renderTags();
+            updateChart();
+            opt.classList.toggle('selected', cb.checked);
+          };
+        });
+        
+        optionsList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+          cb.onchange = () => {
+            const opt = cb.closest('.search-multi-option');
+            const value = opt.dataset.value;
+            if (cb.checked) { if (!filters[stateKey].includes(value)) filters[stateKey].push(value); }
+            else { filters[stateKey] = filters[stateKey].filter(v => v !== value); }
+            renderTags();
+            updateChart();
+            renderOptions(searchInput.value);
+          };
+        });
+      }
+      
+      function renderTags() {
+        tagsContainer.innerHTML = filters[stateKey].map(v => 
+          `<span class="tag">${v}<span class="tag-close" data-value="${v}">×</span></span>`
+        ).join('');
+        tagsContainer.querySelectorAll('.tag-close').forEach(btn => {
+          btn.onclick = () => {
+            filters[stateKey] = filters[stateKey].filter(val => val !== btn.dataset.value);
+            renderTags();
+            renderOptions(searchInput.value);
+            updateChart();
+          };
+        });
+        if (filters[stateKey].length > 0) {
+          input.value = `已选 ${filters[stateKey].length} 项`;
+          input.style.color = '#c9a962';
+        } else {
+          input.value = input.getAttribute('placeholder');
+          input.style.color = '';
+        }
+      }
+      
+      input.onclick = () => {
+        searchInput.value = '';
+        renderOptions('');
+        dropdown.classList.add('show');
+        setTimeout(() => searchInput.focus(), 100);
+      };
+      searchInput.oninput = () => renderOptions(searchInput.value);
+      dropdown.onmouseleave = () => setTimeout(() => { if (!dropdown.matches(':hover')) dropdown.classList.remove('show'); }, 200);
+      document.addEventListener('click', (e) => { if (!container.contains(e.target)) dropdown.classList.remove('show'); });
+      
+      // 添加全选 + 清空按钮
+      let selectAllBtn = container.querySelector('.select-all-btn');
+      let clearBtn = container.querySelector('.clear-filter-btn');
+      if (!selectAllBtn) {
+        selectAllBtn = document.createElement('button');
+        selectAllBtn.className = 'select-all-btn';
+        selectAllBtn.textContent = '全选';
+        selectAllBtn.style.cssText = 'margin-left:4px;padding:2px 10px;border:1px solid #c9a962;background:#fbf7ee;color:#a8874a;border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0;';
+        input.parentNode.insertBefore(selectAllBtn, input.nextSibling);
+        // 清空按钮
+        clearBtn = document.createElement('button');
+        clearBtn.className = 'clear-filter-btn';
+        clearBtn.textContent = '清空';
+        clearBtn.style.cssText = 'margin-left:4px;padding:2px 10px;border:1px solid #ff4d4f;background:#fff2f0;color:#ff4d4f;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0;';
+        selectAllBtn.parentNode.insertBefore(clearBtn, selectAllBtn.nextSibling);
+      }
+      selectAllBtn.onclick = () => {
+        filters[stateKey] = [...values];
+        renderTags();
+        renderOptions(searchInput.value);
+        updateChart();
+      };
+      clearBtn.onclick = () => {
+        filters[stateKey] = [];
+        renderTags();
+        renderOptions(searchInput.value);
+        updateChart();
+      };
+      
+      renderOptions();
+      renderTags();
+    }
+    
+    // 时段筛选事件
+    document.getElementById('timeSlot').addEventListener('change', (e) => {
+      selectedTimeSlot = e.target.value;
+      updateChart();
+    });
+    
+    // 时间模式切换
+    document.querySelectorAll('.time-mode-btn').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('.time-mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        timeMode = btn.dataset.mode;
+        updateChart();
+      };
+    });
+    
+    // 日期变化监听
+    document.getElementById('startDate').addEventListener('change', updateChart);
+    document.getElementById('endDate').addEventListener('change', updateChart);
+    
+    // 对比模式事件
+    document.getElementById('enableCompare').addEventListener('change', (e) => {
+      enableCompare = e.target.checked;
+      document.getElementById('compareDateRange').style.display = enableCompare ? 'flex' : 'none';
+      // 自动填充对比日期：往前推相同天数
+      if (enableCompare) {
+        const s = document.getElementById('startDate').value;
+        const e = document.getElementById('endDate').value;
+        if (s && e) {
+          const days = Math.floor((new Date(e) - new Date(s)) / (86400000));
+          const s2 = new Date(new Date(s).getTime() - (days + 1) * 86400000);
+          const e2 = new Date(new Date(s).getTime() - 86400000);
+          document.getElementById('startDate2').value = s2.toISOString().split('T')[0];
+          document.getElementById('endDate2').value = e2.toISOString().split('T')[0];
+        }
+      }
+      updateChart();
+    });
+    document.getElementById('runCompare').addEventListener('click', updateChart);
+    
+    // 计算指标值
+    function calculateMetric(record, metricKey) {
+      const sales = record.sales || 0;
+      const refund = record.refund || 0;
+      const netSales = sales - refund;
+      const uv = record.uv || 0;
+      const buyers = record.buyers || 0;
+      const newFans = record.newFans || 0;
+      const adCost = record.adCost || 0;
+      const durationMin = record.durationMin || 0;
+      const exposureUsers = record.exposureUsers || 0;
+      
+      switch (metricKey) {
+        case 'sales': return sales;
+        case 'refund': return refund;
+        case 'netSales': return netSales;
+        case 'hourlyGMV': return durationMin > 0 ? sales / (durationMin / 60) : 0;
+        case 'hourlyGSV': return durationMin > 0 ? netSales / (durationMin / 60) : 0;
+        case 'hourlyUV': return durationMin > 0 ? uv / (durationMin / 60) : 0;
+        case 'roiPre': return adCost > 0 ? sales / adCost : 0;
+        case 'roiPost': return adCost > 0 ? netSales / adCost : 0;
+        case 'durationMin': return durationMin;
+        case 'durationHour': return durationMin / 60;
+        case 'uv': return uv;
+        case 'exposureUsers': return exposureUsers;
+        case 'newFans': return newFans;
+        case 'buyers': return buyers;
+        case 'adCost': return adCost;
+        case 'avgPrice': return buyers > 0 ? sales / buyers : 0;
+        // Y2轴百分比指标
+        case 'refundRate': return sales > 0 ? refund / sales : 0;
+        case 'cvr': return uv > 0 ? buyers / uv : 0;
+        case 'uvRate': return exposureUsers > 0 ? uv / exposureUsers : 0;
+        case 'fansRate': return uv > 0 ? newFans / uv : 0;
+        default: return 0;
+      }
+    }
+    
+    // 获取周键
+    function getWeekKey(dateStr) {
+      if (!dateStr) return '';
+      const parts = dateStr.split('-');
+      if (parts.length !== 2) return '';
+      const month = parseInt(parts[0]) - 1;
+      const day = parseInt(parts[1]);
+      const d = new Date(2024, month, day);
+      const yearStart = new Date(d.getFullYear(), 0, 1);
+      const days = Math.floor((d - yearStart) / 86400000);
+      const weekNum = Math.ceil((days + yearStart.getDay() + 1) / 7);
+      return `${d.getFullYear()}-W${weekNum}`;
+    }
+    
+    // 筛选数据（复用filterRecordsAll，保留函数名兼容性）
+    function filterRecords(records) {
+      return filterRecordsAll(records);
+    }
+    
+      // 数据聚合
+      function aggregateData(records) {
+        const filtered = filterRecords(records);
+        const years = [...new Set(filtered.map(r => r.yearMonth ? r.yearMonth.substring(0, 4) : '2023'))];
+        const yearNums = years.map(y => parseInt(y)).filter(y => !isNaN(y));
+        const dataYear = (yearNums.length > 0 ? Math.max(...yearNums) : 2023).toString();
+        
+        const groups = {};
+        filtered.forEach(r => {
+          let key;
+          if (timeMode === 'day') key = r.date;
+          else if (timeMode === 'week') key = getWeekKey(r.date);
+          else if (timeMode === 'month') key = r.date ? r.date.substring(0, 2) + '月' : '';
+          else key = r.date ? dataYear + '年' : '';
+          
+          if (!groups[key]) {
+            groups[key] = { count: 0, metrics: {}, rawMetrics: { sales: 0, refund: 0, uv: 0, buyers: 0, newFans: 0, exposureUsers: 0, adCost: 0, durationMin: 0, watchMinTotal: 0 } };
+          }
+          
+          // 累加原始值（用于计算百分比）
+          groups[key].rawMetrics.sales += r.sales || 0;
+          groups[key].rawMetrics.refund += r.refund || 0;
+          groups[key].rawMetrics.uv += r.uv || 0;
+          groups[key].rawMetrics.buyers += r.buyers || 0;
+          groups[key].rawMetrics.newFans += r.newFans || 0;
+          groups[key].rawMetrics.exposureUsers += r.exposureUsers || 0;
+          groups[key].rawMetrics.adCost += r.adCost || 0;
+          groups[key].rawMetrics.durationMin += r.durationMin || 0;
+          groups[key].rawMetrics.watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0);
+          groups[key].count++;
+          // 原始值已在 rawMetrics 中累加，指标在下方统一计算
+        });
+        
+        // 从聚合总量计算所有指标
+        Object.keys(groups).forEach(key => {
+          const raw = groups[key].rawMetrics;
+          const netSales = raw.sales - raw.refund;
+          const durationHour = raw.durationMin / 60;
+          
+          // 原始指标
+          groups[key].metrics.sales = raw.sales;
+          groups[key].metrics.refund = raw.refund;
+          groups[key].metrics.netSales = netSales;
+          groups[key].metrics.uv = raw.uv;
+          groups[key].metrics.exposureUsers = raw.exposureUsers;
+          groups[key].metrics.newFans = raw.newFans;
+          groups[key].metrics.buyers = raw.buyers;
+          groups[key].metrics.adCost = raw.adCost;
+          groups[key].metrics.durationMin = raw.durationMin;
+          
+          // 派生Y1指标（从聚合总量计算，而非逐条累加）
+          groups[key].metrics.hourlyGMV = durationHour > 0 ? raw.sales / durationHour : 0;
+          groups[key].metrics.hourlyGSV = durationHour > 0 ? netSales / durationHour : 0;
+          groups[key].metrics.hourlyUV = durationHour > 0 ? raw.uv / durationHour : 0;
+          groups[key].metrics.roiPre = raw.adCost > 0 ? raw.sales / raw.adCost : 0;
+          groups[key].metrics.roiPost = raw.adCost > 0 ? netSales / raw.adCost : 0;
+          groups[key].metrics.durationHour = durationHour;
+          groups[key].metrics.avgPrice = raw.buyers > 0 ? raw.sales / raw.buyers : 0;
+          groups[key].metrics.avgWatchMin = raw.watchMinTotal > 0 && raw.uv > 0 ? raw.watchMinTotal / raw.uv : 0;
+          
+          // 百分比Y2指标（从聚合总量计算）
+          groups[key].metrics.refundRate = raw.sales > 0 ? raw.refund / raw.sales : 0;
+          groups[key].metrics.cvr = raw.uv > 0 ? raw.buyers / raw.uv : 0;
+          groups[key].metrics.uvRate = raw.exposureUsers > 0 ? raw.uv / raw.exposureUsers : 0;
+          groups[key].metrics.fansRate = raw.uv > 0 ? raw.newFans / raw.uv : 0;
+        });
+        
+        const labels = Object.keys(groups).sort();
+      return { labels, datasets: groups, count: labels.length };
+    }
+    
+    // 计算TOP3
+    function findTop3Indexes(values) {
+      const indexed = values.map((v, i) => ({ v, i })).filter(x => x.v > 0);
+      indexed.sort((a, b) => b.v - a.v);
+      const rankings = {};
+      indexed.slice(0, 3).forEach((item, rank) => { rankings[item.i] = rank + 1; });
+      return rankings;
+    }
+    
+    // 计算平均值
+    function calculateAverage(values) {
+      const nonZero = values.filter(v => v > 0);
+      if (nonZero.length === 0) return 0;
+      return nonZero.reduce((a, b) => a + b, 0) / nonZero.length;
+    }
+    
+    // 格式化数字
+    function formatNumber(num, isPercent = false) {
+      if (isPercent) return (num * 100).toFixed(2) + '%';
+      if (num >= 10000) return (num / 10000).toFixed(2) + '万';
+      return num.toFixed(2);
+    }
+    
+    function getMetricLabel(key) {
+      const all = [...Y1_METRICS, ...Y2_METRICS];
+      const found = all.find(m => m.key === key);
+      return found ? found.label : key;
+    }
+    
+    // 更新图表
+    function updateChart() {
+      try {
+        const records = allData[currentShop] || [];
+        if (records.length === 0) return;
+        
+        const { labels, datasets, count } = aggregateData(records);
+        if (count === 0) {
+          if (chartY1) { chartY1.destroy(); chartY1 = null; }
+          if (chartY2) { chartY2.destroy(); chartY2 = null; }
+          return;
+        }
+        
+        // Y1轴图表
+        const ctxY1 = document.getElementById('chartY1').getContext('2d');
+        if (chartY1) chartY1.destroy();
+        
+        const y1Datasets = [];
+        selectedY1Metrics.forEach((metric, i) => {
+          const values = labels.map(label => datasets[label].metrics[metric] || 0);
+          const rankings = findTop3Indexes(values);
+          const avg = calculateAverage(values);
+          const color = METRIC_COLORS[i % METRIC_COLORS.length];
+          
+          y1Datasets.push({
+            type: 'bar',
+            label: getMetricLabel(metric),
+            data: values,
+            backgroundColor: values.map((v, idx) => showTop3 && rankings[idx] ? '#e8c36b' : color + '99'),
+            borderColor: values.map((v, idx) => showTop3 && rankings[idx] ? '#c9a962' : color),
+            borderWidth: 1,
+            yAxisID: 'y',
+            order: 2
+          });
+          
+          if (showAvg && values.some(v => v > 0)) {
+            y1Datasets.push({
+              type: 'line',
+              label: `${getMetricLabel(metric)} 平均`,
+              data: labels.map(() => avg),
+              borderColor: color,
+              borderDash: [5, 5],
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: false,
+              yAxisID: 'y',
+              order: 1
+            });
+          }
+        });
+        
+        // 排名标签：数字前缀 + 金/银/铜色
+        const rankColors = ['#c9a962', '#9ea4ad', '#b08a3c'];
+        const y1LabelInfo = labels.map((l, i) => {
+          const rankings = findTop3Indexes(labels.map(label => datasets[label].metrics[selectedY1Metrics[0]] || 0));
+          const rank = rankings[i];
+          return showTop3 && rank ? { text: `${rank}. ${l}`, color: rankColors[rank-1] } : { text: l, color: '#7a8290' };
+        });
+
+        chartY1 = new Chart(ctxY1, {
+          data: {
+            labels: y1LabelInfo.map(x => x.text),
+            datasets: y1Datasets
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { position: 'top', labels: { boxWidth: 12, padding: 15 } } },
+            scales: {
+              y: { type: 'linear', position: 'left', title: { display: true, text: '绝对值' } },
+              x: { ticks: { color: (ctx) => y1LabelInfo[ctx.index] ? y1LabelInfo[ctx.index].color : '#7a8290' } }
+            }
+          }
+        });
+        
+        // Y2轴图表
+        const ctxY2 = document.getElementById('chartY2').getContext('2d');
+        if (chartY2) chartY2.destroy();
+        
+        const y2Datasets = [];
+        selectedY2Metrics.forEach((metric, i) => {
+          const values = labels.map(label => datasets[label].metrics[metric] || 0);
+          const avg = calculateAverage(values);
+          const color = METRIC_COLORS_Y2[i % METRIC_COLORS_Y2.length];
+          
+          y2Datasets.push({
+            type: 'line',
+            label: getMetricLabel(metric),
+            data: values,
+            borderColor: color,
+            backgroundColor: color + '33',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true,
+            yAxisID: 'y2',
+            order: 2
+          });
+          
+          if (showAvg && values.some(v => v > 0)) {
+            y2Datasets.push({
+              type: 'line',
+              label: `${getMetricLabel(metric)} 平均`,
+              data: labels.map(() => avg),
+              borderColor: color,
+              borderDash: [5, 5],
+              borderWidth: 1,
+              pointRadius: 0,
+              fill: false,
+              yAxisID: 'y2',
+              order: 1
+            });
+          }
+        });
+        
+        chartY2 = new Chart(ctxY2, {
+          data: {
+            labels: labels,
+            datasets: y2Datasets
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { position: 'top', labels: { boxWidth: 12, padding: 15 } } },
+            scales: { y2: { type: 'linear', position: 'right', title: { display: true, text: '百分比' }, ticks: { callback: v => (v * 100).toFixed(0) + '%' } } }
+          }
+        });
+        
+        // 数据明细表
+        if (showTable) {
+          renderDataTable(labels, datasets);
+        }
+        
+        // 主播效率对比表
+        renderAnchorTable();
+        
+        // 场控效率对比表
+        renderSupervisorTable();
+        
+        // 平台活动效率对比表
+        renderPlatformTable();
+        // 直播活动效率对比表
+        renderLiveTable();
+        // 时段效率对比表
+        renderTimeSlotTable();
+        
+        // 周期对比
+        if (enableCompare) runComparison();
+        else {
+          document.getElementById('compareResultSection').style.display = 'none';
+        }
+        
+      } catch (e) {
+        console.error('图表更新失败:', e);
+      }
+    }
+    
+    // 执行周期对比
+    function runComparison() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      const s1 = document.getElementById('startDate').value;
+      const e1 = document.getElementById('endDate').value;
+      const s2 = document.getElementById('startDate2').value;
+      const e2 = document.getElementById('endDate2').value;
+      if (!s1 || !e1 || !s2 || !e2) return;
+      
+      const p1 = filterRecordsAll(records);
+      const p2 = filterRecordsAll(records, parseDateInput(s2), parseDateInput(e2));
+      
+      if (p1.length === 0 && p2.length === 0) return;
+      
+      // 聚合两个周期的原始数据
+      const raw1 = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
+      const raw2 = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
+      
+      p1.forEach(r => {
+        raw1.sales += r.sales || 0; raw1.refund += r.refund || 0; raw1.uv += r.uv || 0;
+        raw1.newFans += r.newFans || 0; raw1.buyers += r.buyers || 0; raw1.adCost += r.adCost || 0;
+        raw1.durationMin += r.durationMin || 0; raw1.exposureUsers += r.exposureUsers || 0;
+        raw1.watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0); raw1.count++;
+      });
+      p2.forEach(r => {
+        raw2.sales += r.sales || 0; raw2.refund += r.refund || 0; raw2.uv += r.uv || 0;
+        raw2.newFans += r.newFans || 0; raw2.buyers += r.buyers || 0; raw2.adCost += r.adCost || 0;
+        raw2.durationMin += r.durationMin || 0; raw2.exposureUsers += r.exposureUsers || 0;
+        raw2.watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0); raw2.count++;
+      });
+      
+      const m1 = calcGroupMetrics(raw1);
+      const m2 = calcGroupMetrics(raw2);
+      
+      compareData = { period1: { raw: raw1, metrics: m1, label: formatDateShort(s1) + '~' + formatDateShort(e1) }, period2: { raw: raw2, metrics: m2, label: formatDateShort(s2) + '~' + formatDateShort(e2) } };
+      
+      // 将当前选中的 Y1+Y2 指标透传给渲染函数，确保最新勾选状态
+      renderCompareKpiTable([...selectedY1Metrics, ...selectedY2Metrics]);
+    }
+    
+    // 渲染 KPI 对比卡片表格
+    function renderCompareKpiTable(selectedMetricKeys) {
+      const container = document.getElementById('compareTableContainer');
+      if (!compareData) { container.innerHTML = ''; return; }
+      document.getElementById('compareResultSection').style.display = 'block';
+      
+      const { period1, period2 } = compareData;
+      
+      // 对比指标列表：根据 Y1+Y2 勾选状态动态生成
+      const keys = selectedMetricKeys || [...selectedY1Metrics, ...selectedY2Metrics];
+      const allMetricDefs = [...Y1_METRICS, ...Y2_METRICS];
+      const selectedKeys = new Set(keys);
+      // 始终显示直播场次
+      selectedKeys.add('count');
+      const compareMetrics = [];
+      selectedKeys.forEach(key => {
+        const def = allMetricDefs.find(m => m.key === key);
+        if (def) {
+          compareMetrics.push({ key: def.key, label: def.label, fmt: COMPARE_METRIC_FORMATS[def.key] || 'num' });
+        }
+      });
+      
+      const fmtVal = (v, fmt) => {
+        if (fmt === 'money') return v >= 10000 ? '¥' + (v/10000).toFixed(2) + '万' : '¥' + Math.round(v);
+        if (fmt === 'pct') return (v * 100).toFixed(2) + '%';
+        if (fmt === 'x') return v.toFixed(2) + 'x';
+        if (fmt === 'fixed1') return v.toFixed(1);
+      if (fmt === 'fixed2') return v.toFixed(2);
+        if (v >= 10000) return Math.round(v / 10000) + '万';
+        return Math.round(v).toLocaleString();
+      };
+      
+      let html = `<table class="anchor-table"><thead><tr>
+        <th style="text-align:left;min-width:120px;">指标</th>
+        <th style="background:#f5efe0;color:#a8874a;">${period1.label}</th>
+        <th style="background:#e8f0ec;color:#3f6a5d;">${period2.label}</th>
+        <th style="min-width:90px;">变化</th>
+      </tr></thead><tbody>`;
+      
+      compareMetrics.forEach(m => {
+        const v1 = period1.metrics[m.key] || 0;
+        const v2 = period2.metrics[m.key] || 0;
+        const diff = v2 > 0 ? ((v1 / v2 - 1) * 100) : (v1 > 0 ? -100 : 0);
+        const diffStr = (diff > 0 ? '+' : '') + diff.toFixed(1) + '%';
+        const diffColor = diff > 0 ? '#f5222d' : diff < 0 ? '#52c41a' : '#999';
+        html += `<tr>
+          <td style="text-align:left;font-weight:500;">${m.label}</td>
+          <td style="font-weight:600;">${fmtVal(v1, m.fmt)}</td>
+          <td style="font-weight:600;">${fmtVal(v2, m.fmt)}</td>
+          <td style="color:${diffColor};font-weight:700;">${diffStr}</td>
+        </tr>`;
+      });
+      
+      html += `</tbody></table>`;
+      html += `<div style="margin-top:8px;font-size:12px;color:#999;text-align:right;">
+        绿色↓ = 下降(改善如退款率下降) / 红色↑ = 上升
+      </div>`;
+      
+      container.innerHTML = html;
+    }
+    
+    function formatDateShort(dateStr) {
+      if (!dateStr) return '';
+      const parts = dateStr.split('-');
+      return (parts[0] || '').slice(2) + '/' + (parts[1] || '') + '/' + (parts[2] || '');
+    }
+    
+    // 渲染数据明细表
+    function renderDataTable(labels, datasets) {
+      const container = document.getElementById('tableContainer');
+      const allMetrics = [
+        ...selectedY1Metrics.map(k => ({ key: k, isY1: true })),
+        ...selectedY2Metrics.map(k => ({ key: k, isY1: false }))
+      ];
+      
+      const values = labels.map(l => datasets[l].metrics[selectedY1Metrics[0]] || 0);
+      const rankings = findTop3Indexes(values);
+      
+      let html = `<table class="data-table"><thead><tr><th>时间</th>`;
+      allMetrics.forEach(m => { html += `<th>${getMetricLabel(m.key)}</th>`; });
+      html += `</tr></thead><tbody>`;
+      
+      labels.forEach((label, idx) => {
+        const topBadge = showTop3 && rankings[idx] ? `<span class="top-badge top-${rankings[idx]}"><i data-lucide="medal"></i>${rankings[idx]}</span>` : '';
+        html += `<tr><td>${label}${topBadge}</td>`;
+        allMetrics.forEach(m => {
+          const val = datasets[label].metrics[m.key] || 0;
+          html += `<td>${formatNumber(val, !m.isY1)}</td>`;
+        });
+        html += `</tr>`;
+      });
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+    }
+    
+    // 通用：从日期输入框解析完整日期字符串
+    function parseDateInput(inputVal) {
+      if (!inputVal) return null;
+      const parts = inputVal.split(/[-\/]/);
+      const year = parts[0];
+      const m = parts[parts.length - 2];
+      const d = parts[parts.length - 1];
+      return `${year}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    }
+    
+    // 通用：按所有筛选条件过滤记录（支持自定义日期范围）
+    function filterRecordsAll(records, customStartDate, customEndDate) {
+      const startEl = document.getElementById('startDate');
+      const endEl = document.getElementById('endDate');
+      const startFullDate = customStartDate || parseDateInput(startEl.value);
+      const endFullDate = customEndDate || parseDateInput(endEl.value);
+      
+      return records.filter(r => {
+        if (!r.date || !r.yearMonth) return false;
+        const fullDate = `${r.yearMonth.slice(0, 4)}-${r.date}`;
+        if (startFullDate && fullDate < startFullDate) return false;
+        if (endFullDate && fullDate > endFullDate) return false;
+        // 时段筛选
+        if (selectedTimeSlot && r.timeSlot !== selectedTimeSlot) return false;
+        // 主播筛选
+        if (filters.anchors.length > 0 && !filters.anchors.includes(r.anchor)) return false;
+        // 平台活动筛选
+        if (filters.platformActivities.length > 0 && !filters.platformActivities.includes(r.platformActivity)) return false;
+        // 直播活动筛选
+        if (filters.liveActivities.length > 0 && !filters.liveActivities.includes(r.liveActivity)) return false;
+        // 场控筛选
+        if (filters.supervisors.length > 0 && !filters.supervisors.includes(r.supervisor)) return false;
+        return true;
+      });
+    }
+    
+    // 通用：计算效率对比表的分组聚合 + 衍生指标
+    function calcGroupMetrics(raw) {
+      const g = Object.assign({}, raw);
+      g.netSales = g.sales - g.refund;
+      g.durationHour = g.durationMin / 60;
+      g.hourlyGMV = g.durationMin > 0 ? g.sales / (g.durationMin / 60) : 0;
+      g.hourlyGSV = g.durationMin > 0 ? g.netSales / (g.durationMin / 60) : 0;
+      g.hourlyUV = g.durationMin > 0 ? g.uv / (g.durationMin / 60) : 0;
+      g.roiPre = g.adCost > 0 ? g.sales / g.adCost : 0;
+      g.roiPost = g.adCost > 0 ? g.netSales / g.adCost : 0;
+      g.refundRate = g.sales > 0 ? g.refund / g.sales : 0;
+      g.cvr = g.uv > 0 ? g.buyers / g.uv : 0;
+      g.uvRate = g.exposureUsers > 0 ? g.uv / g.exposureUsers : 0;
+      g.fansRate = g.uv > 0 ? g.newFans / g.uv : 0;
+      g.avgPrice = g.buyers > 0 ? g.sales / g.buyers : 0;
+      g.avgWatchMin = g.uv > 0 ? g.watchMinTotal / g.uv : 0;
+      return g;
+    }
+    
+    // 通用：渲染效率对比表
+    function renderCompareTable(options) {
+      const { filtered, groupField, groupLabel, headId, bodyId, statusId, statusStyle } = options;
+      
+      // 按分组字段汇总
+      const groups = {};
+      filtered.forEach(r => {
+        const key = r[groupField] || ('未知' + groupLabel);
+        if (!groups[key]) {
+          groups[key] = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
+        }
+        groups[key].count++;
+        groups[key].sales += r.sales || 0;
+        groups[key].refund += r.refund || 0;
+        groups[key].uv += r.uv || 0;
+        groups[key].newFans += r.newFans || 0;
+        groups[key].buyers += r.buyers || 0;
+        groups[key].adCost += r.adCost || 0;
+        groups[key].durationMin += r.durationMin || 0;
+        groups[key].exposureUsers += r.exposureUsers || 0;
+        groups[key].watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0);
+      });
+      
+      // 计算衍生指标
+      Object.keys(groups).forEach(key => {
+        groups[key] = calcGroupMetrics(groups[key]);
+      });
+      
+      // 计算汇总行（所有分组的总计）
+      const totalRaw = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
+      Object.keys(groups).forEach(key => {
+        totalRaw.count += groups[key].count || 0;
+        totalRaw.sales += groups[key].sales || 0;
+        totalRaw.refund += groups[key].refund || 0;
+        totalRaw.uv += groups[key].uv || 0;
+        totalRaw.newFans += groups[key].newFans || 0;
+        totalRaw.buyers += groups[key].buyers || 0;
+        totalRaw.adCost += groups[key].adCost || 0;
+        totalRaw.durationMin += groups[key].durationMin || 0;
+        totalRaw.exposureUsers += groups[key].exposureUsers || 0;
+        totalRaw.watchMinTotal += groups[key].watchMinTotal || 0;
+      });
+      const totalMetrics = calcGroupMetrics(totalRaw);
+      
+      // 按净销售额排序
+      const keys = Object.keys(groups).sort((a, b) => groups[b].netSales - groups[a].netSales);
+      
+      // 显示指标：Y1轴 + Y2轴
+      const displayMetrics = [
+        ...selectedY1Metrics.map(k => ({ key: k, label: getMetricLabel(k), isPercent: false })),
+        ...selectedY2Metrics.map(k => ({ key: k, label: getMetricLabel(k), isPercent: true }))
+      ];
+      
+      // 计算每个指标的TOP3
+      const metricRankings = {};
+      displayMetrics.forEach(m => {
+        const values = keys.map(k => groups[k][m.key] || 0);
+        const indexed = values.map((v, i) => ({ v, i })).filter(x => x.v > 0);
+        indexed.sort((a, b) => b.v - a.v);
+        metricRankings[m.key] = {};
+        indexed.slice(0, 3).forEach((item, rank) => { metricRankings[m.key][keys[item.i]] = rank + 1; });
+      });
+      
+      // 列显示状态
+      if (!window.tableColState) window.tableColState = {};
+      const stateKey = `${currentShop}_${headId}`;
+      if (!window.tableColState[stateKey]) window.tableColState[stateKey] = {};
+      const colState = window.tableColState[stateKey];
+      
+      // 切换单列显示/隐藏
+      function toggleTableColumn(headId, colKey, stateKey, keys) {
+        const state = window.tableColState[stateKey];
+        if (state[colKey] === false) {
+          delete state[colKey]; // 恢复显示
+        } else {
+          state[colKey] = false; // 隐藏
+        }
+        // 按列索引重新应用状态
+        const thead = document.getElementById(headId);
+        if (!thead) return;
+        const table = thead.closest('table');
+        keys.forEach((key, idx) => {
+          const colIdx = idx + 1; // +1 跳过了第1列（指标名）
+          const hidden = state[key] === false;
+          const headers = table.querySelectorAll('thead th');
+          const rows = table.querySelectorAll('tbody tr');
+          if (headers[colIdx]) headers[colIdx].style.display = hidden ? 'none' : '';
+          rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells[colIdx]) cells[colIdx].style.display = hidden ? 'none' : '';
+          });
+        });
+        // 根据可见列动态更新汇总行
+        updateSummaryForVisible(headId, stateKey);
+      }
+      
+      // 根据可见列动态更新汇总行
+      function updateSummaryForVisible(headId, stateKey) {
+        const tableData = window.__tableData && window.__tableData[stateKey];
+        if (!tableData) return;
+        const state = window.tableColState[stateKey];
+        const visibleKeys = tableData.keys.filter(k => state[k] !== false);
+        if (visibleKeys.length === 0) return;
+        // 筛选可见组的记录
+        const visibleRecords = tableData.filtered.filter(r => visibleKeys.includes(r[tableData.groupField]));
+        // 先聚合原始数值，再调用 calcGroupMetrics 计算派生指标
+        const totalRaw = { count: 0, sales: 0, refund: 0, uv: 0, newFans: 0, buyers: 0, adCost: 0, durationMin: 0, exposureUsers: 0, watchMinTotal: 0 };
+        visibleRecords.forEach(r => {
+          totalRaw.sales += r.sales || 0;
+          totalRaw.refund += r.refund || 0;
+          totalRaw.uv += r.uv || 0;
+          totalRaw.newFans += r.newFans || 0;
+          totalRaw.buyers += r.buyers || 0;
+          totalRaw.adCost += r.adCost || 0;
+          totalRaw.durationMin += r.durationMin || 0;
+          totalRaw.exposureUsers += r.exposureUsers || 0;
+          totalRaw.watchMinTotal += (r.uv || 0) * (r.avgWatchMin || 0);
+          totalRaw.count += 1;
+        });
+        const visibleTotal = calcGroupMetrics(totalRaw);
+        const thead = document.getElementById(headId);
+        if (!thead) return;
+        const table = thead.closest('table');
+        const rows = table.querySelectorAll('tbody tr');
+        const lastColIdx = tableData.keys.length + 1; // 汇总列索引
+        rows.forEach((row, ri) => {
+          const cells = row.querySelectorAll('td');
+          const metric = tableData.displayMetrics[ri];
+          if (cells[lastColIdx] && metric) {
+            const val = visibleTotal[metric.key] || 0;
+            cells[lastColIdx].textContent = formatNumber(val, metric.isPercent);
+          }
+        });
+      }
+      
+      // 重置所有列显示
+      function resetTableColumns(headId, stateKey) {
+        window.tableColState[stateKey] = {};
+        const thead = document.getElementById(headId);
+        if (!thead) return;
+        const table = thead.closest('table');
+        table.querySelectorAll('thead th, tbody td').forEach(el => el.style.display = '');
+        // 恢复为全量汇总
+        updateSummaryForVisible(headId, stateKey);
+      }
+      const statusEl = document.getElementById(statusId);
+      if (statusEl) {
+        statusEl.innerHTML = `筛选后 ${groupLabel} 数量: <strong>${keys.length}</strong>｜记录数: <strong>${filtered.length}</strong>｜${groupLabel}列表: ${keys.join(', ') || '无数据'}`;
+        // 添加重置列按钮（替换之前的搜索框）
+        let resetBtn = document.querySelector(`[data-table-reset="${headId}"]`);
+        if (!resetBtn) {
+          resetBtn = document.createElement('button');
+          resetBtn.dataset.tableReset = headId;
+          resetBtn.textContent = '重置列';
+          resetBtn.title = '恢复所有隐藏的列';
+          resetBtn.style.cssText = 'margin:6px 0 6px 8px;padding:3px 10px;border:1px solid #c9a962;background:#fbf7ee;color:#a8874a;border-radius:6px;cursor:pointer;font-size:12px;';
+          resetBtn.addEventListener('click', () => resetTableColumns(headId, stateKey));
+          statusEl.parentNode.insertBefore(resetBtn, statusEl.nextSibling);
+        }
+      }
+      
+      // 渲染表头
+      const thead = document.getElementById(headId);
+      let theadHtml = `<tr><th>${groupLabel} / 指标</th>`;
+      keys.forEach(key => {
+        const rank = metricRankings['netSales'] ? metricRankings['netSales'][key] : 0;
+        const badge = showTop3 && rank ? `<span class="rank-badge">${['🥇','🥈','🥉'][rank-1]}</span>` : '';
+        theadHtml += `<th><div class="anchor-name">${badge}${key}</div></th>`;
+      });
+      theadHtml += '</tr>';
+      // 添加汇总列头
+      theadHtml = theadHtml.replace('</tr>', '<th style="background:#f5f7fa;color:#a8874a;font-weight:700;position:sticky;right:0;z-index:3;">汇总</th></tr>');
+      thead.innerHTML = theadHtml;
+      
+      // 列头点击切换显示/隐藏
+      thead.querySelectorAll('th:not(:first-child):not(:last-child)').forEach((th, i) => {
+        const key = keys[i];
+        th.style.cursor = 'pointer';
+        th.title = '点击切换显示/隐藏此列';
+        th.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleTableColumn(headId, key, stateKey, keys);
+        });
+        // 恢复之前的隐藏状态
+        if (colState[key] === false) {
+          th.style.display = 'none';
+        }
+      });
+      
+      // 渲染表体
+      const tbody = document.getElementById(bodyId);
+      let tbodyHtml = '';
+      displayMetrics.forEach(metric => {
+        tbodyHtml += `<tr><td>${metric.label}</td>`;
+        keys.forEach(key => {
+          const val = groups[key][metric.key] || 0;
+          const rank = metricRankings[metric.key] ? metricRankings[metric.key][key] : 0;
+          const topClass = showTop3 && rank ? `top-cell top-${rank}` : '';
+          tbodyHtml += `<td class="${topClass}">${formatNumber(val, metric.isPercent)}</td>`;
+        });
+        const totalVal = totalMetrics[metric.key] || 0;
+        tbodyHtml += `<td style="background:#f5f7fa;font-weight:700;">${formatNumber(totalVal, metric.isPercent)}</td>`;
+        tbodyHtml += '</tr>';
+      });
+      tbody.innerHTML = tbodyHtml;
+      
+      // 存储分组数据以便列切换时动态更新汇总
+      window.__tableData = window.__tableData || {};
+      window.__tableData[stateKey] = { groups, keys, filtered, groupField, displayMetrics };
+    }
+    
+    // 渲染主播效率对比表（与所有筛选条件联动）
+    function renderAnchorTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      
+      const filtered = filterRecordsAll(records);
+      
+      renderCompareTable({
+        filtered,
+        groupField: 'anchor',
+        groupLabel: '主播',
+        headId: 'anchorTableHead',
+        bodyId: 'anchorTableBody',
+        statusId: 'anchorFilterStatus'
+      });
+    }
+    
+    // 渲染场控效率对比表（与所有筛选条件联动）
+    function renderSupervisorTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      
+      const filtered = filterRecordsAll(records);
+      
+      renderCompareTable({
+        filtered,
+        groupField: 'supervisor',
+        groupLabel: '场控',
+        headId: 'supervisorTableHead',
+        bodyId: 'supervisorTableBody',
+        statusId: 'supervisorFilterStatus'
+      });
+    }
+    
+    // 渲染平台活动效率对比表
+    function renderPlatformTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      const filtered = filterRecordsAll(records);
+      renderCompareTable({
+        filtered,
+        groupField: 'platformActivity',
+        groupLabel: '平台活动',
+        headId: 'platformTableHead',
+        bodyId: 'platformTableBody',
+        statusId: 'platformFilterStatus'
+      });
+    }
+    
+    // 渲染直播活动效率对比表
+    function renderLiveTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      const filtered = filterRecordsAll(records);
+      renderCompareTable({
+        filtered,
+        groupField: 'liveActivity',
+        groupLabel: '直播活动',
+        headId: 'liveTableHead',
+        bodyId: 'liveTableBody',
+        statusId: 'liveFilterStatus'
+      });
+    }
+    
+    // 渲染时段效率对比表
+    function renderTimeSlotTable() {
+      const records = allData[currentShop] || [];
+      if (records.length === 0) return;
+      const filtered = filterRecordsAll(records);
+      renderCompareTable({
+        filtered,
+        groupField: 'timeSlot',
+        groupLabel: '时段',
+        headId: 'timeSlotTableHead',
+        bodyId: 'timeSlotTableBody',
+        statusId: 'timeSlotFilterStatus'
+      });
+    }
+  
