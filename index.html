@@ -28,9 +28,57 @@
         box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
         color: white;
       }
-    </style>
+    /* ===== 更新时间轴 ===== */
+.update-tl{max-width:1280px;margin:0 auto;padding:8px 32px 0;font-family:'Inter','PingFang SC','Microsoft YaHei',sans-serif}
+.update-tl .utl-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:var(--card,#fff);border:1px solid rgba(201,169,98,.25);border-radius:10px;
+  padding:8px 14px;font-size:12px;color:var(--ink-2,#5b554a)}
+.update-tl .utl-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.update-tl .utl-dot.ok{background:#2e7d32}
+.update-tl .utl-dot.fail{background:#b3261e}
+.update-tl .utl-tag{font-weight:700;font-size:12px}
+.update-tl .utl-tag.ok{color:#2e7d32}
+.update-tl .utl-tag.fail{color:#b3261e}
+.update-tl .utl-sep{opacity:.35;margin:0 2px}
+.update-tl .utl-time{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink,#1d1b16)}
+.update-tl .utl-note{opacity:.75}
+.update-tl .utl-toggle{margin-left:auto;cursor:pointer;color:var(--gold,#c9a962);
+  font-weight:600;font-size:12px;background:none;border:none;padding:2px 4px}
+.update-tl .utl-toggle:hover{text-decoration:underline}
+.update-tl .utl-history{display:none;margin-top:8px;background:var(--card,#fff);
+  border:1px solid rgba(201,169,98,.18);border-radius:10px;padding:10px 14px}
+.update-tl .utl-history.show{display:block}
+.update-tl .utl-hd{font-size:12px;font-weight:700;color:var(--ink,#1d1b16);margin-bottom:8px}
+.update-tl .utl-row{display:flex;align-items:center;gap:8px;padding:5px 0;
+  border-bottom:1px dashed rgba(201,169,98,.15);font-size:12px;color:var(--ink-2,#5b554a)}
+.update-tl .utl-row:last-child{border-bottom:none}
+.update-tl .utl-row .utl-dot{width:6px;height:6px}
+.update-tl .utl-row .utl-d{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink,#1d1b16);min-width:96px}
+.update-tl .utl-row .utl-s.ok{color:#2e7d32;font-weight:600}
+.update-tl .utl-row .utl-s.fail{color:#b3261e;font-weight:600}
+.update-tl .utl-row .utl-n{opacity:.75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ===== END 更新时间轴 ===== */
+</style>
   </head>
   <body>
+
+<!-- ===== 更新时间轴 START ===== -->
+<div class="update-tl">
+  <div class="utl-bar">
+    <span class="utl-dot ok"></span>
+    <span class="utl-tag ok">更新成功</span>
+    <span class="utl-sep">·</span>
+    <span class="utl-time">08-13 11:00</span>
+    <span class="utl-sep">·</span>
+    <span class="utl-note">数据更新时间轴</span>
+    <button class="utl-toggle" onclick="document.querySelector('.utl-history').classList.toggle('show')">历史记录 ▾</button>
+  </div>
+  <div class="utl-history">
+    <div class="utl-hd">最近更新记录</div>
+    <div class='utl-row'><span class='utl-dot ok'></span><span class='utl-d'>2026-08-13 11:00:29</span><span class='utl-s ok'>✓</span><span class='utl-n'>直播看板数据更新</span></div>
+  </div>
+</div>
+<!-- ===== 更新时间轴 END ===== -->
     <div id="root"></div>
     <a href="./trend.html" target="_blank" class="trend-link">📈 趋势分析</a>
     <div style="position:fixed;bottom:8px;right:8px;font-size:11px;color:#999;z-index:9999;background:rgba(255,255,255,0.8);padding:2px 8px;border-radius:4px;" id="versionBadge">v2.0.0727</div>
