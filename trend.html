@@ -411,7 +411,7 @@
     ];
     
     // 数据加载
-    fetch('./live_data.json')
+    fetch('./live_data.json', { cache: 'no-cache' })
       .then(r => r.json())
       .then(data => {
         allData = data;
