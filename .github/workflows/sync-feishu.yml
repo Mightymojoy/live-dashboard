@@ -28,9 +28,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 安装依赖
-        run: pip install --quiet requests
-
       - name: 同步飞书数据
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}

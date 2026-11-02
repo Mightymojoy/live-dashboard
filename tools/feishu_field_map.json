@@ -1,6 +1,9 @@
 {
-  "_说明": "目标字段（看板消费的 28 列）→ 飞书多维表格列名。空字符串表示尚未确认。先跑 python tools/feishu_sync.py --inspect 查看真实列名后填入。",
-  "table_id": "",
+  "_说明": "数据源定位 + 字段映射。先跑 python tools/feishu_sync.py --inspect，按真实表头填写。",
+  "sourceType": "sheet",
+  "sheetTitle": "",
+  "sheetId": "",
+  "headerRow": 1,
   "shopField": "店铺",
   "fields": {
     "id": "",

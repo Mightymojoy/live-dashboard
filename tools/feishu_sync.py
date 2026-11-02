@@ -3,7 +3,7 @@
 飞书知识库 → live_data.json 同步脚本
 
 用法:
-    python tools/feishu_sync.py --inspect   探明 wiki 节点类型 / 表字段 / 样例数据，不写任何文件
+    python tools/feishu_sync.py --inspect   探明节点类型 / 子表 / 表头 / 样例数据，不写任何文件
     python tools/feishu_sync.py --sync      全量拉取 → 校验闸门 → 写 live_data.json 与 sync_meta.json
 
 环境变量（GitHub Actions 里配成 Secrets）:
@@ -11,22 +11,20 @@
     FEISHU_APP_SECRET   自建应用 App Secret
     FEISHU_WIKI_TOKEN   wiki 节点 token（默认已内置当前看板对应的节点）
 
-注意:
-    本脚本的字段映射来自 tools/feishu_field_map.json。
-    首次使用请先跑 --inspect，按真实列名补全映射后再跑 --sync。
-    未跑过 --inspect 的情况下，--sync 会拒绝写入，避免用错列名污染线上数据。
+依赖: 仅标准库，无需 pip install。
+
+说明:
+    字段映射在 tools/feishu_field_map.json。首次使用必须先跑 --inspect，
+    按真实表头补全映射后再跑 --sync；映射不完整时脚本拒绝写入。
 """
 import argparse
 import datetime
 import json
 import os
 import sys
-
-try:
-    import requests
-except ImportError:
-    print("[错误] 缺少 requests 依赖，请先执行 pip install requests")
-    sys.exit(1)
+import urllib.error
+import urllib.parse
+import urllib.request
 
 BASE = "https://open.feishu.cn/open-apis"
 DEFAULT_WIKI_TOKEN = "J8sdwGyjYiyeNikTGTuczPJOnkf"
@@ -36,7 +34,6 @@ MAP_PATH = os.path.join(HERE, "feishu_field_map.json")
 DATA_PATH = os.path.join(ROOT, "live_data.json")
 META_PATH = os.path.join(ROOT, "sync_meta.json")
 
-# 看板消费的 28 个字段（顺序与字段名必须与现有 live_data.json 一致）
 TARGET_FIELDS = [
     "id", "yearMonth", "date", "platformActivity", "liveActivity", "week",
     "session", "timeSlot", "supervisor", "anchor", "startTime", "durationMin",
@@ -49,10 +46,34 @@ NUMERIC_FIELDS = {
     "refund2", "adCost", "roiPre", "roiPost", "gpm", "uvValue", "cvr",
     "peakViewers", "avgViewers", "avgWatchMin",
 }
+CHUNK_ROWS = 800
 
 
 def log(msg):
     print(msg, flush=True)
+
+
+def http_json(method, path, token=None, payload=None, params=None):
+    """仅用标准库发请求，避免依赖 requests（本机 venv 可能缺包）。"""
+    url = path if path.startswith("http") else BASE + path
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Content-Type", "application/json; charset=utf-8")
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")
+        try:
+            return json.loads(body)
+        except ValueError:
+            return {"code": e.code, "msg": body[:200]}
+    except urllib.error.URLError as e:
+        return {"code": -1, "msg": "网络错误: %s" % e.reason}
 
 
 def get_env(name, required=True):
@@ -64,9 +85,8 @@ def get_env(name, required=True):
 
 
 def get_token(app_id, app_secret):
-    r = requests.post(BASE + "/auth/v3/tenant_access_token/internal",
-                      json={"app_id": app_id, "app_secret": app_secret}, timeout=30)
-    data = r.json()
+    data = http_json("POST", "/auth/v3/tenant_access_token/internal",
+                     payload={"app_id": app_id, "app_secret": app_secret})
     if data.get("code") != 0:
         log("[错误] 获取 tenant_access_token 失败: %s" % data)
         sys.exit(3)
@@ -74,26 +94,70 @@ def get_token(app_id, app_secret):
 
 
 def api_get(token, path, params=None):
-    r = requests.get(BASE + path, headers={"Authorization": "Bearer " + token},
-                     params=params or {}, timeout=60)
-    return r.json()
+    return http_json("GET", path, token=token, params=params)
 
 
 def api_post(token, path, payload, params=None):
-    r = requests.post(BASE + path, headers={"Authorization": "Bearer " + token},
-                      json=payload, params=params or {}, timeout=60)
-    return r.json()
+    return http_json("POST", path, token=token, payload=payload, params=params)
 
 
 def resolve_node(token, wiki_token):
     data = api_get(token, "/wiki/v2/spaces/get_node", {"token": wiki_token, "obj_type": "wiki"})
     if data.get("code") != 0:
         log("[错误] 解析 wiki 节点失败: %s" % data)
-        log("       常见原因：应用未开通 wiki:wiki:readonly，或未被加入该知识库空间")
+        log("       原因多为：应用未开通 wiki:wiki:readonly，或未被加入该知识库空间")
         sys.exit(4)
     node = data["data"]["node"]
     return node.get("obj_type"), node.get("obj_token"), node.get("title")
 
+
+def col_letter(n):
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def fail(code, what, data):
+    log("[错误] %s 失败: %s" % (what, data))
+    if data.get("code") == 99991672:
+        log("       缺少权限：请在开发者后台开通 sheets:spreadsheet:readonly 后重试。")
+    sys.exit(code)
+
+
+# ---------------- 电子表格 ----------------
+
+def list_sheets(token, st):
+    data = api_get(token, "/sheets/v3/spreadsheets/%s/sheets/query" % st)
+    if data.get("code") != 0:
+        fail(5, "读取子表列表", data)
+    return data["data"].get("sheets", [])
+
+
+def read_range(token, st, rng):
+    path = "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng)
+    data = api_get(token, path, {"valueRenderOption": "ToString"})
+    if data.get("code") != 0:
+        fail(6, "读取单元格范围 %s" % rng, data)
+    vr = (data.get("data") or {}).get("valueRange") or {}
+    return vr.get("values") or []
+
+
+def read_sheet(token, st, sheet_id, row_count, col_count):
+    rows, start = [], 1
+    last_col = col_letter(max(col_count, 1))
+    while start <= row_count:
+        end = min(start + CHUNK_ROWS - 1, row_count)
+        block = read_range(token, st, "%s!A%d:%s%d" % (sheet_id, start, last_col, end))
+        if not block:
+            break
+        rows.extend(block)
+        start = end + 1
+    return rows
+
+
+# ---------------- 多维表格 ----------------
 
 def list_bitable_tables(token, app_token):
     tables, page_token = [], None
@@ -103,26 +167,15 @@ def list_bitable_tables(token, app_token):
             params["page_token"] = page_token
         data = api_get(token, "/bitable/v1/apps/%s/tables" % app_token, params)
         if data.get("code") != 0:
-            log("[错误] 读取多维表格数据表失败: %s" % data)
-            sys.exit(5)
-        items = data["data"].get("items", [])
-        tables.extend(items)
+            fail(7, "读取数据表列表", data)
+        tables.extend(data["data"].get("items", []))
         if not data["data"].get("has_more"):
             break
         page_token = data["data"].get("page_token")
     return tables
 
 
-def list_fields(token, app_token, table_id):
-    data = api_get(token, "/bitable/v1/apps/%s/tables/%s/fields" % (app_token, table_id),
-                   {"page_size": 200})
-    if data.get("code") != 0:
-        log("[错误] 读取字段定义失败: %s" % data)
-        sys.exit(6)
-    return data["data"].get("items", [])
-
-
-def fetch_records(token, app_token, table_id):
+def fetch_bitable_records(token, app_token, table_id):
     out, page_token = [], None
     while True:
         params = {"page_size": 500}
@@ -131,8 +184,7 @@ def fetch_records(token, app_token, table_id):
         data = api_post(token, "/bitable/v1/apps/%s/tables/%s/records/search" % (app_token, table_id),
                         {"automatic_fields": False}, params)
         if data.get("code") != 0:
-            log("[错误] 读取记录失败: %s" % data)
-            sys.exit(7)
+            fail(8, "读取记录", data)
         out.extend(data["data"].get("items", []))
         if not data["data"].get("has_more"):
             break
@@ -140,8 +192,9 @@ def fetch_records(token, app_token, table_id):
     return out
 
 
+# ---------------- 值归一 ----------------
+
 def cell_text(v):
-    """把飞书单元格值归一成字符串/数字。"""
     if v is None:
         return ""
     if isinstance(v, bool):
@@ -154,7 +207,7 @@ def cell_text(v):
         parts = []
         for item in v:
             if isinstance(item, dict):
-                parts.append(str(item.get("text") or item.get("name") or item.get("file_name") or ""))
+                parts.append(str(item.get("text") or item.get("name") or ""))
             else:
                 parts.append(str(item))
         return "".join(parts).strip()
@@ -177,135 +230,202 @@ def to_num(v, default=0.0):
 
 
 def to_date_pair(v):
-    """返回 (MM-DD, YYYY-MM)。支持毫秒时间戳与常见字符串。"""
-    raw = v
     if isinstance(v, (int, float)):
-        dt = datetime.datetime.fromtimestamp(v / 1000)
-        return dt.strftime("%m-%d"), dt.strftime("%Y-%m")
-    t = str(cell_text(v))
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%m-%d"):
         try:
-            dt = datetime.datetime.strptime(t[:len(fmt) + 2].strip(), fmt)
-            if fmt == "%m-%d":
-                dt = dt.replace(year=datetime.date.today().year)
+            dt = datetime.datetime.fromtimestamp(v / 1000)
             return dt.strftime("%m-%d"), dt.strftime("%Y-%m")
-        except ValueError:
-            continue
-    return "", ""
+        except (ValueError, OSError):
+            return "", ""
+    t = str(cell_text(v)).strip()
+    if not t:
+        return "", ""
+    head = t.split(" ")[0].replace("/", "-")
+    parts = head.split("-")
+    try:
+        if len(parts) == 3:
+            y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+        elif len(parts) == 2:
+            m, d = int(parts[0]), int(parts[1])
+            y = datetime.date.today().year
+        else:
+            return "", ""
+        return "%02d-%02d" % (m, d), "%04d-%02d" % (y, m)
+    except ValueError:
+        return "", ""
+
+
+# ---------------- 命令 ----------------
+
+def cmd_inspect(token, obj_type, obj_token, title):
+    log("=" * 64)
+    log("节点标题：%s" % title)
+    log("对象类型：%s" % obj_type)
+    log("对象 token：%s" % obj_token)
+    log("=" * 64)
+
+    if obj_type == "sheet":
+        sheets = list_sheets(token, obj_token)
+        for s in sheets:
+            gp = s.get("grid_properties") or {}
+            log("\n子表：%s" % s.get("title"))
+            log("  sheet_id=%s  行=%s  列=%s" % (s.get("sheet_id"), gp.get("row_count"), gp.get("column_count")))
+            cols = int(gp.get("column_count") or 1)
+            rows = read_range(token, obj_token, "%s!A1:%s6" % (s.get("sheet_id"), col_letter(cols)))
+            for i, row in enumerate(rows):
+                cells = ["" if c is None else str(c) for c in row]
+                log("  第%d行: %s" % (i + 1, " | ".join(cells)[:420]))
+        log("\n下一步：把上面的表头填进 tools/feishu_field_map.json，再执行 --sync")
+        return
+
+    if obj_type == "bitable":
+        for t in list_bitable_tables(token, obj_token):
+            log("\n数据表：%s（table_id=%s）" % (t.get("name"), t.get("table_id")))
+            recs = fetch_bitable_records(token, obj_token, t["table_id"])[:3]
+            for r in recs:
+                log("  样例: " + json.dumps(r.get("fields", {}), ensure_ascii=False)[:400])
+        log("\n下一步：把上面的列名填进 tools/feishu_field_map.json，再执行 --sync")
+        return
+
+    log("[提示] 节点类型 %s 暂不支持自动同步，只能导出后人工处理。" % obj_type)
 
 
 def load_map():
     if not os.path.exists(MAP_PATH):
         log("[错误] 缺少字段映射文件 tools/feishu_field_map.json")
-        sys.exit(8)
+        sys.exit(9)
     with open(MAP_PATH, encoding="utf-8") as f:
         cfg = json.load(f)
     mapping = cfg.get("fields", {})
-    missing = [k for k in TARGET_FIELDS if not mapping.get(k)]
+    missing = [k for k in TARGET_FIELDS if not str(mapping.get(k, "")).strip()]
     return cfg, mapping, missing
 
 
-def cmd_inspect(token, obj_type, obj_token, title):
-    log("=" * 62)
-    log("wiki 节点：%s" % title)
-    log("对象类型：%s" % obj_type)
-    log("对象 token：%s" % obj_token)
-    log("=" * 62)
-    if obj_type != "bitable":
-        log("[提示] 该节点不是多维表格（bitable），当前脚本只支持多维表格直读。")
-        log("       若是电子表格，需要改用 sheets 接口；若是文档，只能导出后解析。")
-        return
-    tables = list_bitable_tables(token, obj_token)
-    for t in tables:
-        log("\n数据表：%s（table_id=%s）" % (t.get("name"), t.get("table_id")))
-        fields = list_fields(token, obj_token, t["table_id"])
-        for f in fields:
-            log("    - %-24s type=%s" % (f.get("field_name"), f.get("type")))
-        records = fetch_records(token, obj_token, t["table_id"])[:3]
-        log("    样例记录（前 3 条）：")
-        for r in records:
-            log("      " + json.dumps(r.get("fields", {}), ensure_ascii=False)[:300])
-    log("\n下一步：把上面的列名填进 tools/feishu_field_map.json 的 fields 映射，再执行 --sync")
-
-
-def validate(prev_shops, new_shops, new_total, new_cutoff):
+def validate(prev, result, new_total, new_cutoff):
     errors = []
-    prev_total = sum(len(v) for v in prev_shops.values()) if prev_shops else 0
+    prev_total = sum(len(v) for v in prev.values()) if prev else 0
     if prev_total > 0 and new_total < prev_total * 0.9:
         errors.append("总条数骤降：%d → %d（低于上次的 90%%）" % (prev_total, new_total))
     prev_cut = ""
-    for recs in prev_shops.values():
+    for recs in prev.values():
         for r in recs:
-            d = str(r.get("yearMonth") or "") + "-" + str(r.get("date") or "")
-            if d > prev_cut:
-                prev_cut = d
+            c = str(r.get("yearMonth") or "") + "-" + str(r.get("date") or "")
+            if c > prev_cut:
+                prev_cut = c
     if prev_cut and new_cutoff and new_cutoff < prev_cut[:7]:
-        errors.append("数据截止日期倒退：%s → %s" % (prev_cut[:7], new_cutoff))
-    missing_shops = [s for s in prev_shops.keys() if s not in new_shops]
+        errors.append("数据截止月份倒退：%s → %s" % (prev_cut[:7], new_cutoff))
+    missing_shops = [s for s in prev.keys() if s not in result]
     if missing_shops:
         errors.append("店铺缺失：%s" % "、".join(missing_shops))
     return errors
 
 
-def cmd_sync(token, obj_type, obj_token):
-    if obj_type != "bitable":
-        log("[中止] 当前节点类型为 %s，只支持 bitable 直读。" % obj_type)
-        sys.exit(9)
-    cfg, mapping, missing = load_map()
-    if missing:
-        log("[中止] 字段映射不完整，缺少以下目标字段的飞书列名：")
-        for m in missing:
-            log("    - %s" % m)
-        log("请先执行 --inspect 查看真实列名，补全 tools/feishu_field_map.json")
+def build_from_rows(rows, cfg, mapping):
+    header_row = int(cfg.get("headerRow", 1))
+    if len(rows) < header_row:
+        log("[中止] 子表行数不足，读不到表头")
         sys.exit(10)
+    header = [str(c).strip() if c is not None else "" for c in rows[header_row - 1]]
+    idx = {}
+    for target, src in mapping.items():
+        if not str(src).strip():
+            continue
+        if src not in header:
+            log("[中止] 表头里找不到列「%s」（映射自 %s）" % (src, target))
+            log("       实际表头：%s" % " | ".join([h for h in header if h]))
+            sys.exit(11)
+        idx[target] = header.index(src)
 
-    table_id = cfg["table_id"]
-    shop_field = cfg["shopField"]
-    log("[1/4] 拉取记录…")
-    records = fetch_records(token, obj_token, table_id)
-    log("      共 %d 条原始记录" % len(records))
+    shop_field = cfg.get("shopField", "店铺")
+    if shop_field not in header:
+        log("[中止] 表头里找不到店铺列「%s」" % shop_field)
+        sys.exit(12)
+    shop_idx = header.index(shop_field)
 
-    log("[2/4] 字段映射与清洗…")
     result, skipped = {}, 0
-    for item in records:
-        f = item.get("fields", {})
-        shop = str(cell_text(f.get(shop_field, ""))).strip()
+    for row in rows[header_row:]:
+        def get(target):
+            i = idx.get(target)
+            return row[i] if i is not None and i < len(row) else None
+
+        shop = str(cell_text(row[shop_idx] if shop_idx < len(row) else "")).strip()
         if not shop:
             skipped += 1
             continue
-        row = {}
-        for target, src in mapping.items():
-            v = f.get(src)
-            if target in NUMERIC_FIELDS:
-                row[target] = to_num(v)
-            elif target in ("date", "yearMonth"):
+        rec = {}
+        for target in TARGET_FIELDS:
+            if target in ("date", "yearMonth"):
                 continue
+            if target in idx:
+                v = get(target)
+                rec[target] = to_num(v) if target in NUMERIC_FIELDS else cell_text(v)
             else:
-                row[target] = cell_text(v)
-        d, ym = to_date_pair(f.get(mapping["date"])) if mapping.get("date") else ("", "")
-        row["date"], row["yearMonth"] = d, ym
-        if not row.get("id"):
-            row["id"] = item.get("record_id", "")
-        result.setdefault(shop, []).append(row)
-    log("      有效 %d 条，缺少店铺字段被跳过 %d 条" % (sum(len(v) for v in result.values()), skipped))
+                rec[target] = 0.0 if target in NUMERIC_FIELDS else ""
+        d, ym = to_date_pair(get("date")) if "date" in idx else ("", "")
+        rec["date"], rec["yearMonth"] = d, ym
+        result.setdefault(shop, []).append(rec)
+    return result, skipped
 
-    log("[3/4] 校验闸门…")
+
+def cmd_sync(token, obj_type, obj_token):
+    cfg, mapping, missing = load_map()
+    if missing:
+        log("[中止] 字段映射不完整，以下目标字段还没有对应飞书列名：")
+        for m in missing:
+            log("    - %s" % m)
+        log("请先执行 --inspect 查看真实表头，补全 tools/feishu_field_map.json")
+        sys.exit(13)
+
+    log("[1/3] 拉取数据…")
+    if obj_type == "sheet":
+        sheets = list_sheets(token, obj_token)
+        want_id = cfg.get("sheetId") or ""
+        want_title = cfg.get("sheetTitle") or ""
+        target = None
+        for s in sheets:
+            if want_id and s.get("sheet_id") == want_id:
+                target = s
+                break
+            if want_title and s.get("title") == want_title:
+                target = s
+                break
+        if not target:
+            log("[中止] 找不到指定子表（sheetId=%s / sheetTitle=%s）" % (want_id, want_title))
+            log("       可用子表：%s" % "、".join([s.get("title", "") for s in sheets]))
+            sys.exit(14)
+        gp = target.get("grid_properties") or {}
+        rows = read_sheet(token, obj_token, target["sheet_id"],
+                          int(gp.get("row_count") or 0), int(gp.get("column_count") or 1))
+        log("      子表「%s」共 %d 行" % (target.get("title"), len(rows)))
+        result, skipped = build_from_rows(rows, cfg, mapping)
+    elif obj_type == "bitable":
+        log("[中止] 当前节点是多维表格，但映射配置按电子表格模式编写，请核对 feishu_field_map.json")
+        sys.exit(15)
+    else:
+        log("[中止] 不支持的节点类型：%s" % obj_type)
+        sys.exit(16)
+
+    new_total = sum(len(v) for v in result.values())
+    log("      有效 %d 条，缺少店铺字段跳过 %d 条" % (new_total, skipped))
+
+    log("[2/3] 校验闸门…")
     prev = {}
     if os.path.exists(DATA_PATH):
-        with open(DATA_PATH, encoding="utf-8") as fp:
-            prev = json.load(fp)
-    new_total = sum(len(v) for v in result.values())
+        try:
+            with open(DATA_PATH, encoding="utf-8") as fp:
+                prev = json.load(fp)
+        except ValueError:
+            prev = {}
     cutoffs = sorted({r.get("yearMonth", "")[:7] for v in result.values() for r in v if r.get("yearMonth")})
     new_cutoff = cutoffs[-1] if cutoffs else ""
     errors = validate(prev, result, new_total, new_cutoff)
     if errors:
         for e in errors:
             log("      [不通过] " + e)
-        log("[中止] 校验未通过，不写入任何文件，线上数据保持原样。")
-        sys.exit(11)
+        log("[中止] 校验未通过，不写任何文件，线上数据保持原样。")
+        sys.exit(17)
     log("      通过：%d 条 / 截止 %s / %d 个店铺" % (new_total, new_cutoff, len(result)))
 
-    log("[4/4] 写入文件…")
+    log("[3/3] 写入文件…")
     tmp = DATA_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fp:
         json.dump(result, fp, ensure_ascii=False, separators=(",", ":"))
