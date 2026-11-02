@@ -33,6 +33,7 @@ jobs:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_WIKI_TOKEN: ${{ secrets.FEISHU_WIKI_TOKEN }}
+          SYNC_ACTOR: GitHub Actions
         run: python tools/feishu_sync.py --sync
 
       - name: 提交并推送
