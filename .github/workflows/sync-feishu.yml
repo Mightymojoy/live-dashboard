@@ -1,0 +1,49 @@
+name: sync-feishu
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 0 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-feishu
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出 dist 分支
+        uses: actions/checkout@v4
+        with:
+          ref: dist
+          fetch-depth: 1
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 同步飞书数据
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_WIKI_TOKEN: ${{ secrets.FEISHU_WIKI_TOKEN }}
+          SYNC_ACTOR: GitHub Actions
+        run: python tools/feishu_sync.py --sync
+
+      - name: 提交并推送
+        run: |
+          git config user.name "ito-sync-bot"
+          git config user.email "ito-sync-bot@users.noreply.github.com"
+          git add live_data.json sync_meta.json
+          if git diff --cached --quiet; then
+            echo "本次无数据变更，跳过提交"
+            exit 0
+          fi
+          git commit -m "Sync from Feishu: $(date +%F)"
+          git push origin HEAD:dist
