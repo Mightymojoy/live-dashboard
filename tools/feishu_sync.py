@@ -172,8 +172,10 @@ def fail(code, what, data):
     c = data.get("code")
     if c == 99991672:
         log("       缺少权限：请在开发者后台开通 sheets:spreadsheet:readonly 并发布版本。")
-        log("       授权链接：https://open.feishu.cn/app/cli_aa629e95bf7cdbf1/auth"
-            "?q=sheets:spreadsheet:readonly&op_from=openapi&token_type=tenant")
+        app_id = os.environ.get("FEISHU_APP_ID", "").strip()
+        if app_id:
+            log("       授权链接：https://open.feishu.cn/app/%s/auth"
+                "?q=sheets:spreadsheet:readonly&op_from=openapi&token_type=tenant" % app_id)
     elif c in (1254302, 1310249):
         log("       该电子表格未授权给本应用：请在表格「···」→ 文档协作者里添加应用。")
     sys.exit(code)
