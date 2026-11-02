@@ -12,6 +12,40 @@
     .navbar { background: #001529; padding: 0 24px; display: flex; align-items: center; height: 64px; }
     .navbar h1 { color: #fff; font-size: 20px; }
     .navbar a { color: #fff; text-decoration: none; margin-right: 24px; }
+
+    /* ===== 同步飞书模块 ===== */
+    .sync-wrap { margin-left: auto; position: relative; display: flex; align-items: center; gap: 6px; }
+    .sync-btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px;
+      background: rgba(201,169,98,.14); border: 1px solid #c9a962; border-radius: 6px;
+      color: #f3e7c8; font-size: 14px; cursor: pointer; transition: background .2s, opacity .2s; white-space: nowrap; }
+    .sync-btn:hover { background: rgba(201,169,98,.26); }
+    .sync-btn:disabled { cursor: progress; opacity: .85; }
+    .sync-btn .dot { width: 7px; height: 7px; border-radius: 50%; background: #52c41a; flex: none; }
+    .sync-btn.busy .dot { background: #c9a962; animation: syncPulse 1s ease-in-out infinite; }
+    .sync-btn.fail .dot { background: #ff4d4f; }
+    @keyframes syncPulse { 0%,100% { opacity: 1 } 50% { opacity: .2 } }
+    .sync-gear { background: transparent; border: none; color: #8fa0b3; font-size: 16px; line-height: 1;
+      cursor: pointer; padding: 8px; border-radius: 4px; }
+    .sync-gear:hover { color: #c9a962; background: rgba(255,255,255,.07); }
+    .sync-panel { position: absolute; top: 46px; right: 0; width: 344px; background: #fff;
+      border: 1px solid #e5e0d5; border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.2);
+      padding: 16px; display: none; z-index: 300; font-size: 13px; text-align: left; }
+    .sync-panel.show { display: block; }
+    .sync-panel h5 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #1d1b16; }
+    .sync-panel p { color: #6b665c; line-height: 1.65; margin-bottom: 10px; }
+    .sync-panel input { width: 100%; padding: 7px 10px; border: 1px solid #d9d9d9; border-radius: 5px;
+      font-size: 12px; margin-bottom: 10px; font-family: ui-monospace, monospace; }
+    .sync-panel .row { display: flex; gap: 8px; }
+    .sync-panel .btn { flex: 1; padding: 7px 0; border-radius: 5px; font-size: 12px; cursor: pointer;
+      border: 1px solid #c9a962; background: #c9a962; color: #241f14; }
+    .sync-panel .btn.ghost { background: #fff; color: #6b665c; border-color: #d9d9d9; }
+    .sync-panel .hint { font-size: 12px; color: #9a9384; margin: 10px 0 0; }
+    .sync-toast { position: fixed; top: 78px; right: 24px; z-index: 400; max-width: 400px;
+      padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.6; color: #fff;
+      background: #2e7d32; box-shadow: 0 8px 24px rgba(0,0,0,.22); display: none; }
+    .sync-toast.show { display: block; }
+    .sync-toast.err { background: #b3261e; }
+    .sync-toast.info { background: #001529; border: 1px solid #c9a962; }
     
     .container { max-width: 1600px; margin: 0 auto; padding: 24px; }
     
@@ -166,6 +200,25 @@
   <nav class="navbar">
     <a href="index.html">← 返回主页</a>
     <h1>趋势分析</h1>
+    <div class="sync-wrap">
+      <button class="sync-btn" id="btnSyncFeishu" title="从飞书知识库重新同步数据">
+        <span class="dot"></span><span id="syncBtnText">同步飞书数据</span>
+      </button>
+      <button class="sync-gear" id="btnSyncGear" title="同步设置">⚙</button>
+      <div class="sync-panel" id="syncPanel">
+        <h5>飞书数据同步</h5>
+        <p>同步由 GitHub Actions 在云端执行，浏览器只负责发起，不接触飞书密钥。首次使用需填写一次 GitHub 访问令牌，仅保存在本机浏览器。</p>
+        <input id="ghTokenInput" type="password" placeholder="GitHub Token（Actions 读写权限）" autocomplete="off">
+        <div class="row">
+          <button class="btn" id="btnSaveToken">保存令牌</button>
+          <button class="btn ghost" id="btnClearToken">清除</button>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn ghost" id="btnReloadOnly">仅重新加载数据</button>
+        </div>
+        <p class="hint" id="syncPanelStatus"></p>
+      </div>
+    </div>
   </nav>
   
   <div class="container">
@@ -413,36 +466,54 @@
       '#eb2f96', '#13c2c2', '#2f54d4', '#a0d911', '#fa541c'
     ];
     
-    // 数据加载
-    fetch('./live_data.json', { cache: 'no-cache' })
-      .then(r => r.json())
-      .then(data => {
-        allData = data;
-        console.log('【DEBUG】数据加载完成，店铺列表:', Object.keys(allData));
-        
-        // 打印每个店铺的日期和主播示例
-        Object.keys(allData).forEach(shop => {
-          const records = allData[shop] || [];
-          const dates = [...new Set(records.map(r => r.date).filter(Boolean))].sort();
-          const anchors = [...new Set(records.map(r => r.anchor).filter(Boolean))];
-          console.log(`【DEBUG】${shop}: 共${records.length}条记录`);
-          console.log(`  日期范围: ${dates[0]} ~ ${dates[dates.length-1]}`);
-          console.log(`  主播列表: ${anchors.join(', ')}`);
-          if (dates.length > 0) {
-            console.log(`  日期示例(前5个): ${dates.slice(0, 5).join(', ')}`);
-          }
+    // 数据加载（可重复调用：手动刷新 / 飞书同步后重载）
+    let loadingData = false;
+    function loadDashboardData(opts) {
+      opts = opts || {};
+      if (loadingData) return Promise.resolve(allData);
+      loadingData = true;
+      const url = './live_data.json' + (opts.forceFresh ? '?t=' + Date.now() : '');
+      return fetch(url, { cache: opts.forceFresh ? 'no-store' : 'no-cache' })
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(data => {
+          allData = data;
+          const shops = Object.keys(allData);
+          if (shops.length > 0 && shops.indexOf(currentShop) === -1) currentShop = shops[0];
+          initTabs();
+          initMetrics();
+          initFilters();
+          updateChart();
+          loadingData = false;
+          return data;
+        })
+        .catch(e => {
+          loadingData = false;
+          handleLoadError(e);
+          throw e;
         });
-        
-        const shops = Object.keys(allData);
-        if (shops.length > 0) currentShop = shops[0];
-        initTabs();
-        initMetrics();
-        initFilters();
-        updateChart();
-      })
-      .catch(e => {
-        document.body.innerHTML = `<div class="error">数据加载失败: ${e.message}</div>`;
-      });
+    }
+    window.loadDashboardData = loadDashboardData;
+
+    function handleLoadError(e) {
+      const container = document.querySelector('.container');
+      if (Object.keys(allData).length > 0) {
+        // 已有数据：保留上次结果，只提示失败
+        if (window.showSyncToast) showSyncToast('数据刷新失败：' + e.message + '，仍在显示上次加载的数据', 'err', 8000);
+        return;
+      }
+      if (container) {
+        container.innerHTML =
+          '<div style="padding:48px 24px;text-align:center;">' +
+          '<div style="font-size:15px;color:#b3261e;margin-bottom:16px;">数据加载失败：' + e.message + '</div>' +
+          '<button onclick="loadDashboardData({forceFresh:true}).catch(function(){})" ' +
+          'style="padding:8px 22px;border:1px solid #1890ff;background:#1890ff;color:#fff;border-radius:4px;cursor:pointer;font-size:13px;">重试</button>' +
+          '</div>';
+      }
+    }
+
     
     // 初始化Tab
     function initTabs() {
@@ -1514,6 +1585,204 @@
         statusId: 'timeSlotFilterStatus'
       });
     }
+
+    /* ================= 同步飞书模块 ================= */
+    const SYNC_CFG = {
+      owner: 'Mightymojoy',
+      repo: 'live-dashboard',
+      workflow: 'sync-feishu.yml',
+      ref: 'dist',
+      api: 'https://api.github.com'
+    };
+    const TOKEN_KEY = 'ito_live_dashboard_gh_token';
+    let pollTimer = null;
+
+    function syncToken() {
+      try { return (localStorage.getItem(TOKEN_KEY) || '').trim(); } catch (e) { return ''; }
+    }
+
+    function showSyncToast(msg, kind, ms) {
+      let el = document.getElementById('syncToast');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'syncToast';
+        el.className = 'sync-toast';
+        document.body.appendChild(el);
+      }
+      el.className = 'sync-toast show' + (kind ? ' ' + kind : '');
+      el.textContent = msg;
+      clearTimeout(el._timer);
+      el._timer = setTimeout(function () { el.classList.remove('show'); }, ms || 4000);
+    }
+    window.showSyncToast = showSyncToast;
+
+    function setSyncState(state, label) {
+      const btn = document.getElementById('btnSyncFeishu');
+      const txt = document.getElementById('syncBtnText');
+      if (!btn) return;
+      btn.classList.remove('busy', 'fail');
+      if (state === 'busy') btn.classList.add('busy');
+      if (state === 'fail') btn.classList.add('fail');
+      btn.disabled = (state === 'busy');
+      if (txt && label) txt.textContent = label;
+    }
+
+    function openSyncPanel(force) {
+      const p = document.getElementById('syncPanel');
+      if (!p) return;
+      if (force) p.classList.add('show'); else p.classList.toggle('show');
+      const st = document.getElementById('syncPanelStatus');
+      if (st) st.textContent = syncToken() ? '令牌已配置（仅本机浏览器）' : '尚未配置令牌';
+    }
+
+    async function ghRequest(path, options) {
+      const token = syncToken();
+      if (!token) throw new Error('NO_TOKEN');
+      const headers = {
+        'Authorization': 'Bearer ' + token,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      };
+      if (options && options.body) headers['Content-Type'] = 'application/json';
+      const res = await fetch(SYNC_CFG.api + path, {
+        method: (options && options.method) || 'GET',
+        headers: headers,
+        body: options && options.body ? options.body : undefined
+      });
+      if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.text()).slice(0, 160); } catch (e) {}
+        const err = new Error('GitHub 返回 ' + res.status + (detail ? '：' + detail : ''));
+        err.status = res.status;
+        throw err;
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    }
+
+    async function startFeishuSync() {
+      if (!syncToken()) {
+        openSyncPanel(true);
+        showSyncToast('请先在设置里填写 GitHub 访问令牌，只需配置一次', 'info', 6000);
+        return;
+      }
+      setSyncState('busy', '同步中…');
+      const startedAt = Date.now();
+      try {
+        await ghRequest('/repos/' + SYNC_CFG.owner + '/' + SYNC_CFG.repo +
+          '/actions/workflows/' + SYNC_CFG.workflow + '/dispatches', {
+          method: 'POST',
+          body: JSON.stringify({ ref: SYNC_CFG.ref })
+        });
+        showSyncToast('已触发云端同步，通常 1-2 分钟完成…', 'info', 6000);
+        const run = await waitForRun(startedAt);
+        if (run && run.conclusion && run.conclusion !== 'success') {
+          throw new Error('工作流结束状态：' + run.conclusion);
+        }
+        await loadDashboardData({ forceFresh: true }).catch(function () {});
+        await refreshSyncMeta();
+        setSyncState('ok', '同步飞书数据');
+        showSyncToast('同步完成，数据已更新到最新', null, 4500);
+      } catch (e) {
+        setSyncState('fail', '同步失败 · 重试');
+        let msg = e.message || String(e);
+        if (msg === 'NO_TOKEN') msg = '未配置访问令牌';
+        else if (e.status === 401) msg = '令牌无效或已过期，请重新填写';
+        else if (e.status === 403) msg = '令牌权限不足（需要 Actions 读写）或已触达调用上限';
+        else if (e.status === 404) msg = '找不到工作流 sync-feishu.yml，确认已推送到 dist 分支';
+        showSyncToast('同步失败：' + msg, 'err', 9000);
+      }
+    }
+
+    function waitForRun(startedAt) {
+      return new Promise(function (resolve, reject) {
+        const deadline = Date.now() + 6 * 60 * 1000;
+        function tick() {
+          if (Date.now() > deadline) {
+            reject(new Error('等待超时，请到 GitHub Actions 页面查看执行结果'));
+            return;
+          }
+          ghRequest('/repos/' + SYNC_CFG.owner + '/' + SYNC_CFG.repo +
+            '/actions/workflows/' + SYNC_CFG.workflow + '/runs?per_page=5')
+            .then(function (data) {
+              const runs = (data && data.workflow_runs) || [];
+              const run = runs.filter(function (r) {
+                return new Date(r.created_at).getTime() >= startedAt - 120000;
+              })[0];
+              if (run && run.status === 'completed') { resolve(run); return; }
+              if (run) setSyncState('busy', run.status === 'queued' ? '排队中…' : '同步中…');
+              pollTimer = setTimeout(tick, 6000);
+            })
+            .catch(function (err) {
+              if (err.status === 401 || err.status === 403) { reject(err); return; }
+              pollTimer = setTimeout(tick, 10000);
+            });
+        }
+        tick();
+      });
+    }
+
+    async function refreshSyncMeta() {
+      try {
+        const res = await fetch('./sync_meta.json?t=' + Date.now(), { cache: 'no-store' });
+        if (!res.ok) return;
+        applySyncMeta(await res.json());
+      } catch (e) { /* 无 meta 文件时保持页面原有文案 */ }
+    }
+    window.refreshSyncMeta = refreshSyncMeta;
+
+    function applySyncMeta(meta) {
+      if (!meta) return;
+      const timeEl = document.querySelector('.utl-time');
+      const noteEl = document.querySelector('.utl-note');
+      const tagEl = document.querySelector('.utl-tag');
+      if (timeEl && meta.dataCutoff) timeEl.textContent = '数据截止 ' + meta.dataCutoff;
+      if (noteEl) {
+        const parts = [];
+        if (meta.recordCount) parts.push(meta.recordCount + ' 条');
+        if (meta.source) parts.push('来源 ' + meta.source);
+        if (meta.syncedAt) parts.push('同步于 ' + meta.syncedAt);
+        if (parts.length) noteEl.textContent = parts.join(' · ');
+      }
+      if (tagEl) {
+        tagEl.textContent = meta.status === 'fail' ? '同步异常' : '数据正常';
+        tagEl.className = 'utl-tag ' + (meta.status === 'fail' ? 'fail' : 'ok');
+      }
+    }
+
+    document.getElementById('btnSyncFeishu').addEventListener('click', startFeishuSync);
+    document.getElementById('btnSyncGear').addEventListener('click', function (e) {
+      e.stopPropagation();
+      openSyncPanel();
+    });
+    document.getElementById('btnSaveToken').addEventListener('click', function () {
+      const v = (document.getElementById('ghTokenInput').value || '').trim();
+      if (!v) { showSyncToast('令牌不能为空', 'err', 3000); return; }
+      try { localStorage.setItem(TOKEN_KEY, v); } catch (e) {}
+      document.getElementById('ghTokenInput').value = '';
+      openSyncPanel(true);
+      showSyncToast('令牌已保存到本机浏览器', null, 3000);
+    });
+    document.getElementById('btnClearToken').addEventListener('click', function () {
+      try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+      openSyncPanel(true);
+      showSyncToast('已清除本机令牌', 'info', 3000);
+    });
+    document.getElementById('btnReloadOnly').addEventListener('click', function () {
+      const p = document.getElementById('syncPanel');
+      if (p) p.classList.remove('show');
+      loadDashboardData({ forceFresh: true })
+        .then(function () { showSyncToast('已重新加载最新数据', null, 3000); })
+        .catch(function () {});
+    });
+    document.addEventListener('click', function (e) {
+      const panel = document.getElementById('syncPanel');
+      const wrap = document.querySelector('.sync-wrap');
+      if (panel && wrap && !wrap.contains(e.target)) panel.classList.remove('show');
+    });
+
+    loadDashboardData().catch(function () {});
+    refreshSyncMeta();
   </script>
 </body>
 </html>
