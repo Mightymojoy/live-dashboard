@@ -99,6 +99,17 @@ EMPTY_TOKENS = {"", "-", "--", "/", ".", "N/A", "n/a", "NA", "null", "None", "na
 EXCEL_EPOCH = datetime.datetime(1899, 12, 30)
 CHUNK_ROWS = 800
 WS_RE = re.compile(r"[\s\u3000]+")
+BEIJING_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def now_beijing():
+    """统一用北京时间。
+
+    GitHub Actions 的 ubuntu runner 是 UTC，直接用 datetime.now() 会让
+    sync_meta.json 的 syncedAt 比实际早 8 小时（实测首跑写入 06:12，
+    实际为北京 14:12），看板上会显示错误时间。
+    """
+    return datetime.datetime.now(BEIJING_TZ)
 
 
 def log(msg):
@@ -539,7 +550,7 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
         "source": "飞书知识库",
         "dataCutoff": new_cut,
         "recordCount": new_total,
-        "syncedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "syncedAt": now_beijing().strftime("%Y-%m-%d %H:%M"),
         "updatedBy": os.environ.get("SYNC_ACTOR", "本地脚本"),
         "note": "页面运行时读取本文件，用于显示真实的数据截止时间与同步状态。",
     }
