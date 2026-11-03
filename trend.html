@@ -137,6 +137,13 @@
 .update-tl .utl-tag.fail{color:#b3261e}
 .update-tl .utl-sep{opacity:.35;margin:0 2px}
 .update-tl .utl-time{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink,#1d1b16)}
+/* 源表日期异常标记：琥珀色胶囊，不抢正常状态条的视觉层次，但一眼能看到 */
+.update-tl .utl-warn{display:none;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;
+  background:#fff4d6;border:1px solid #e6c667;color:#8a5b00;font-size:12px;font-weight:700;
+  white-space:nowrap;cursor:pointer;line-height:1.6}
+.update-tl .utl-warn.show{display:inline-flex}
+.update-tl .utl-warn:hover{background:#ffeab3;border-color:#d4ac45}
+.update-tl .utl-warn::before{content:"⚠";font-size:11px}
 .update-tl .utl-note{opacity:.75}
 .update-tl .utl-toggle{margin-left:auto;cursor:pointer;color:var(--gold,#c9a962);
   font-weight:600;font-size:12px;background:none;border:none;padding:2px 4px}
@@ -187,6 +194,7 @@
     <span class="utl-time">11-02 10:52</span>
     <span class="utl-sep">·</span>
     <span class="utl-note">数据更新时间轴</span>
+    <span class="utl-warn" id="utlWarn"></span>
     <button class="utl-toggle" onclick="document.querySelector('.utl-history').classList.toggle('show')">历史记录 ▾</button>
   </div>
   <div class="utl-history">
@@ -1832,6 +1840,29 @@
         tagEl.textContent = meta.status === 'fail' ? '同步异常' : '数据正常';
         tagEl.className = 'utl-tag ' + (meta.status === 'fail' ? 'fail' : 'ok');
       }
+      applyFutureWarn(meta);
+    }
+
+    // 源表有日期晚于今天的记录时（多为预填或录入错误），在状态条上挂一个琥珀色标记
+    function applyFutureWarn(meta) {
+      const el = document.getElementById('utlWarn');
+      if (!el) return;
+      const n = Number((meta && meta.futureRecords) || 0);
+      if (!n) {
+        el.classList.remove('show');
+        el.textContent = '';
+        el.title = '';
+        el.onclick = null;
+        return;
+      }
+      const tip = (meta && meta.warning)
+        || ('源表有 ' + n + ' 行日期晚于今天，未计入数据截止日期');
+      el.textContent = '源表 ' + n + ' 行日期异常';
+      el.title = tip + '（点击查看）';
+      el.onclick = function () {
+        showSyncToast(tip + '。请到飞书「直播数据源表」核对这几行的开播时间', 'info', 12000);
+      };
+      el.classList.add('show');
     }
 
     document.getElementById('btnSyncFeishu').addEventListener('click', startFeishuSync);
