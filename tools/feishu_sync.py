@@ -460,17 +460,52 @@ def cmd_inspect(token, obj_type, obj_token, title):
     log("\n下一步：python tools/feishu_sync.py --sync --dry-run 先比对条数与截止日期。")
 
 
-def summarize(result):
+def build_full_date(rec):
+    """把 (yearMonth, date) 还原成 YYYY-MM-DD。
+
+    yearMonth 形如 2026-11，date 形如 11-03，年份取 yearMonth 前 4 位、月日取 date。
+    注意不能直接字符串拼接后截取：'2026-11'+'-'+'12-30' = '2026-11-12-30'，
+    截 [:7] 会得到 '2026-11'，月份信息被 date 的月份覆盖（曾把 12-30 显示成 11-30）。
+    """
+    ym = str(rec.get("yearMonth") or "")
+    dt = str(rec.get("date") or "")
+    if not dt:
+        return ""
+    if len(dt) >= 5 and dt[2] == "-":
+        year = ym[:4] if len(ym) >= 4 and ym[:4].isdigit() else ""
+        return ("%s-%s" % (year, dt)) if year else dt
+    if len(dt) == 10:
+        return dt
+    return ""
+
+
+def summarize(result, today=None):
+    """返回 (总条数, 数据截止日, 未来日期记录数)。
+
+    截止日只统计「不晚于今天」的记录：源表里常有人预填/复制出错成未来日期
+    （实测 2026-12-30 那种脏行），若计入会让看板显示"数据截止 12-30"，
+    与实际已发生的直播场次不符。这类记录本身保留，只是不参与截止日计算。
+    """
+    if today is None:
+        today = now_beijing().date()
     total = sum(len(v) for v in result.values())
     cutoff = ""
+    future = 0
     for recs in result.values():
         for r in recs:
-            c = "%s-%s" % (r.get("yearMonth") or "", r.get("date") or "")
-            if c > cutoff:
-                cutoff = c
-    day = cutoff.split("-")[-1] if "-" in cutoff else ""
-    cutoff = "%s-%s" % (cutoff[:7], day) if day else cutoff[:7]
-    return total, cutoff
+            full = build_full_date(r)
+            if not full:
+                continue
+            try:
+                d = datetime.date.fromisoformat(full)
+            except ValueError:
+                continue
+            if d > today:
+                future += 1
+                continue
+            if full > cutoff:
+                cutoff = full
+    return total, cutoff, future
 
 
 def validate(prev, result):
@@ -481,8 +516,8 @@ def validate(prev, result):
     new_total = sum(len(v) for v in result.values())
     if prev_total and new_total < prev_total * 0.9:
         errors.append("总条数骤降：%d → %d（低于上次的 90%%）" % (prev_total, new_total))
-    _, prev_cut = summarize(prev)
-    _, new_cut = summarize(result)
+    _, prev_cut, _ = summarize(prev)
+    _, new_cut, _ = summarize(result)
     if prev_cut and new_cut and new_cut[:7] < prev_cut[:7]:
         errors.append("数据截止月份倒退：%s → %s" % (prev_cut, new_cut))
     missing = [s for s in prev.keys() if s not in result]
@@ -515,8 +550,11 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
     for line in detail:
         log(line)
 
-    new_total, new_cut = summarize(result)
+    new_total, new_cut, new_future = summarize(result)
     log("      合计 %d 条 / 截止 %s / %d 个店铺" % (new_total, new_cut, len(result)))
+    if new_future:
+        log("      [提示] 有 %d 条记录日期晚于今天，已排除在截止日之外（可能是源表预填或录入错误）"
+            % new_future)
 
     log("[2/3] 校验闸门…")
     prev = {}
@@ -552,8 +590,11 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
         "recordCount": new_total,
         "syncedAt": now_beijing().strftime("%Y-%m-%d %H:%M"),
         "updatedBy": os.environ.get("SYNC_ACTOR", "本地脚本"),
+        "futureRecords": new_future,
         "note": "页面运行时读取本文件，用于显示真实的数据截止时间与同步状态。",
     }
+    if new_future:
+        meta["warning"] = "源表有 %d 条记录日期晚于今天，未计入截止日，请检查是否为预填或录入错误" % new_future
     with open(META_PATH, "w", encoding="utf-8") as fp:
         json.dump(meta, fp, ensure_ascii=False, indent=2)
     log("      完成：live_data.json %d 条，sync_meta.json 已更新" % new_total)
