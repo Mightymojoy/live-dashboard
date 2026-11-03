@@ -3,7 +3,13 @@ name: sync-feishu
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 0 * * *'
+    # 北京时间 09:17 与 13:17（UTC 01:17 / 05:17）
+    # 原来写 30 0 * * *（北京 08:30），正好落在 UTC 00:30——官方文档明确说明
+    # "High load times include the start of every hour. If the load is sufficiently
+    #  high enough, some queued jobs may be dropped"，实测 11-03 08:30 那次就被丢弃。
+    # 改为避开整点区段并加一个备份时点，只要其中一次成功当天数据就是新的。
+    - cron: '17 1 * * *'
+    - cron: '17 5 * * *'
 
 permissions:
   contents: write
