@@ -473,11 +473,15 @@
     
     // 数据加载（可重复调用：手动刷新 / 飞书同步后重载）
     let loadingData = false;
+    let dataVersion = '';
     function loadDashboardData(opts) {
       opts = opts || {};
       if (loadingData) return Promise.resolve(allData);
       loadingData = true;
-      const url = './live_data.json' + (opts.forceFresh ? '?t=' + Date.now() : '');
+      // 普通加载带版本号：GitHub Pages CDN 对 json 有 max-age=600 缓存，
+      // 用 syncedAt 当版本号可让每次同步后自动换 URL，避免看到 10 分钟前的旧数据
+      const url = './live_data.json' + (opts.forceFresh ? '?t=' + Date.now()
+        : (dataVersion ? '?v=' + dataVersion : ''));
       return fetch(url, { cache: opts.forceFresh ? 'no-store' : 'no-cache' })
         .then(r => {
           if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1707,6 +1711,7 @@
       }
       setSyncState('busy', '同步中…');
       const startedAt = Date.now();
+      const beforeMeta = await fetchMeta();
       try {
         await ghRequest('/repos/' + SYNC_CFG.owner + '/' + SYNC_CFG.repo +
           '/actions/workflows/' + SYNC_CFG.workflow + '/dispatches', {
@@ -1718,11 +1723,19 @@
         if (run && run.conclusion && run.conclusion !== 'success') {
           throw new Error('工作流结束状态：' + run.conclusion);
         }
+        // 云端任务跑完 ≠ 线上已发布：Pages 重建还要 1-2 分钟（实测 12:06 完成、12:07:49 生效）
+        // 这里等到 sync_meta 真实变化再拉数据，避免把旧数据当成"已更新到最新"
+        const freshMeta = await waitForFreshMeta(beforeMeta);
         await loadDashboardData({ forceFresh: true }).catch(function () {});
-        await refreshSyncMeta();
+        const finalMeta = freshMeta || await fetchMeta();
+        if (finalMeta) applySyncMeta(finalMeta);
         panelState = null;
         setSyncState('ok', '同步飞书数据');
-        showSyncToast('同步完成，数据已更新到最新', null, 4500);
+        if (freshMeta) {
+          showSyncToast('同步完成，数据已更新到最新', null, 4500);
+        } else {
+          showSyncToast('云端已跑完，页面发布仍在进行，约 1 分钟后点「刷新数据」', 'info', 9000);
+        }
       } catch (e) {
         setSyncState('fail', '同步失败 · 重试');
         let msg = e.message || String(e);
@@ -1758,6 +1771,36 @@
               if (err.status === 401 || err.status === 403) { reject(err); return; }
               pollTimer = setTimeout(tick, 10000);
             });
+        }
+        tick();
+      });
+    }
+
+    async function fetchMeta() {
+      try {
+        const res = await fetch('./sync_meta.json?t=' + Date.now(), { cache: 'no-store' });
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (e) { return null; }
+    }
+
+    function metaChanged(before, now) {
+      if (!before || !now) return true;
+      return before.syncedAt !== now.syncedAt
+        || before.dataCutoff !== now.dataCutoff
+        || before.recordCount !== now.recordCount;
+    }
+
+    function waitForFreshMeta(before) {
+      return new Promise(function (resolve) {
+        const deadline = Date.now() + 4 * 60 * 1000;
+        function tick() {
+          fetchMeta().then(function (m) {
+            if (m && metaChanged(before, m)) { resolve(m); return; }
+            if (Date.now() > deadline) { resolve(null); return; }
+            setSyncState('busy', '等待发布…');
+            pollTimer = setTimeout(tick, 8000);
+          });
         }
         tick();
       });
@@ -1835,8 +1878,15 @@
       if (panel && wrap && !wrap.contains(e.target)) panel.classList.remove('show');
     });
 
-    loadDashboardData().catch(function () {});
-    refreshSyncMeta();
+      // 启动顺序：先拿最新 sync_meta（带时间戳绕 CDN）→ 用 syncedAt 当数据版本号 → 再取数据
+      // 这样首屏不会因为 CDN 10 分钟缓存而显示上一版数据
+      (async function boot() {
+        const m = await fetchMeta();
+        if (m && m.syncedAt) dataVersion = String(m.syncedAt).replace(/[^0-9]/g, '');
+        if (m) applySyncMeta(m);
+        await loadDashboardData().catch(function () {});
+        if (!m) refreshSyncMeta();
+      })();
   </script>
 </body>
 </html>
