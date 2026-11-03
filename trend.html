@@ -40,6 +40,10 @@
       border: 1px solid #c9a962; background: #c9a962; color: #241f14; }
     .sync-panel .btn.ghost { background: #fff; color: #6b665c; border-color: #d9d9d9; }
     .sync-panel .hint { font-size: 12px; color: #9a9384; margin: 10px 0 0; }
+    .sync-panel .hint.ok { color: #2e7d32; }
+    .sync-panel .hint.err { color: #c62828; font-weight: 500; }
+    .sync-panel .fmt { font-size: 11px; color: #9a9384; margin: 6px 0 0; line-height: 1.6; }
+    .sync-panel .fmt code { background: #f4f1ea; padding: 1px 4px; border-radius: 3px; color: #5c5344; }
     .sync-toast { position: fixed; top: 78px; right: 24px; z-index: 400; max-width: 400px;
       padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.6; color: #fff;
       background: #2e7d32; box-shadow: 0 8px 24px rgba(0,0,0,.22); display: none; }
@@ -208,7 +212,8 @@
       <div class="sync-panel" id="syncPanel">
         <h5>飞书数据同步</h5>
         <p>同步由 GitHub Actions 在云端执行，浏览器只负责发起，不接触飞书密钥。首次使用需填写一次 GitHub 访问令牌，仅保存在本机浏览器。</p>
-        <input id="ghTokenInput" type="password" placeholder="GitHub Token（Actions 读写权限）" autocomplete="off">
+        <input id="ghTokenInput" type="password" placeholder="粘贴 GitHub 令牌（github_pat_ 或 ghp_ 开头）" autocomplete="off">
+        <p class="fmt">令牌格式：<code>github_pat_…</code> 或 <code>ghp_…</code>。若你手上是 32 位字母数字（如 <code>y7U9…</code>），那是飞书 App Secret，不能填这里。</p>
         <div class="row">
           <button class="btn" id="btnSaveToken">保存令牌</button>
           <button class="btn ghost" id="btnClearToken">清除</button>
@@ -1627,12 +1632,46 @@
       if (txt && label) txt.textContent = label;
     }
 
-    function openSyncPanel(force) {
+    function classifyToken(v) {
+      if (!v) return { kind: 'empty', label: '未填写' };
+      if (/^github_pat_/.test(v)) return { kind: 'fine', label: 'fine-grained 令牌' };
+      if (/^ghp_/.test(v)) return { kind: 'classic', label: 'classic 令牌' };
+      if (/^gh[orsu]_/.test(v)) return { kind: 'other', label: 'OAuth 令牌，不能用于此处' };
+      if (/^[0-9a-f]{40}$/i.test(v)) return { kind: 'legacy', label: '旧式 classic 令牌' };
+      if (/^[A-Za-z0-9]{28,40}$/.test(v)) return { kind: 'feishu', label: '疑似飞书 App Secret（32 位字母数字）' };
+      return { kind: 'unknown', label: '无法识别的格式' };
+    }
+
+    function tokenFingerprint(v) {
+      if (!v || v.length < 11) return '长度异常';
+      return v.slice(0, 10) + '…' + v.slice(-4);
+    }
+
+    let panelState = null;
+
+    function setPanelStatus(text, cls) {
+      panelState = text ? { text: text, cls: cls || '' } : null;
+      const st = document.getElementById('syncPanelStatus');
+      if (!st) return;
+      st.textContent = panelState ? panelState.text : '';
+      st.className = 'hint' + (panelState && panelState.cls ? ' ' + panelState.cls : '');
+    }
+
+    function openSyncPanel(force, msg, cls) {
       const p = document.getElementById('syncPanel');
       if (!p) return;
       if (force) p.classList.add('show'); else p.classList.toggle('show');
-      const st = document.getElementById('syncPanelStatus');
-      if (st) st.textContent = syncToken() ? '令牌已配置（仅本机浏览器）' : '尚未配置令牌';
+      if (msg) { setPanelStatus(msg, cls); return; }
+      if (panelState) return;
+      const v = syncToken();
+      if (!v) { setPanelStatus('尚未配置令牌'); return; }
+      const c = classifyToken(v);
+      const bad = (c.kind === 'feishu' || c.kind === 'unknown' || c.kind === 'other');
+      setPanelStatus(
+        '令牌已配置（' + tokenFingerprint(v) + '）· ' + c.label +
+        (bad ? ' —— 格式可疑，请点「清除」后重新填写' : ''),
+        bad ? 'err' : 'ok'
+      );
     }
 
     async function ghRequest(path, options) {
@@ -1681,15 +1720,17 @@
         }
         await loadDashboardData({ forceFresh: true }).catch(function () {});
         await refreshSyncMeta();
+        panelState = null;
         setSyncState('ok', '同步飞书数据');
         showSyncToast('同步完成，数据已更新到最新', null, 4500);
       } catch (e) {
         setSyncState('fail', '同步失败 · 重试');
         let msg = e.message || String(e);
         if (msg === 'NO_TOKEN') msg = '未配置访问令牌';
-        else if (e.status === 401) msg = '令牌无效或已过期，请重新填写';
-        else if (e.status === 403) msg = '令牌权限不足（需要 Actions 读写）或已触达调用上限';
-        else if (e.status === 404) msg = '找不到工作流 sync-feishu.yml，确认已推送到 dist 分支';
+        else if (e.status === 401) msg = '令牌无效（401）：GitHub 不认这串字符。最常见是粘成了飞书 App Secret，或令牌已过期/被撤销。请点「清除」后重新填写 github_pat_ 开头的令牌。';
+        else if (e.status === 403) msg = '令牌权限不足（403）：需要把 Actions 权限设为 Read and write，或已触达调用上限。';
+        else if (e.status === 404) msg = '找不到工作流（404）：令牌的仓库授权里没有勾选 live-dashboard。';
+        setPanelStatus(msg, 'err');
         showSyncToast('同步失败：' + msg, 'err', 9000);
       }
     }
@@ -1757,14 +1798,27 @@
     });
     document.getElementById('btnSaveToken').addEventListener('click', function () {
       const v = (document.getElementById('ghTokenInput').value || '').trim();
-      if (!v) { showSyncToast('令牌不能为空', 'err', 3000); return; }
+      if (!v) { setPanelStatus('令牌不能为空', 'err'); return; }
+      const c = classifyToken(v);
+      if (c.kind === 'feishu') {
+        setPanelStatus('这是飞书 App Secret，不是 GitHub 令牌。飞书密钥由云端工作流使用，浏览器不需要填。', 'err');
+        showSyncToast('这是飞书 App Secret，不能填在这里', 'err', 7000);
+        return;
+      }
+      if (c.kind === 'empty' || c.kind === 'unknown' || c.kind === 'other') {
+        setPanelStatus('令牌格式不对：' + c.label + '。应以 github_pat_ 或 ghp_ 开头。', 'err');
+        showSyncToast('令牌格式不对，未保存', 'err', 6000);
+        return;
+      }
       try { localStorage.setItem(TOKEN_KEY, v); } catch (e) {}
       document.getElementById('ghTokenInput').value = '';
+      panelState = null;
       openSyncPanel(true);
-      showSyncToast('令牌已保存到本机浏览器', null, 3000);
+      showSyncToast('令牌已保存：' + c.label, null, 3000);
     });
     document.getElementById('btnClearToken').addEventListener('click', function () {
       try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+      panelState = null;
       openSyncPanel(true);
       showSyncToast('已清除本机令牌', 'info', 3000);
     });
