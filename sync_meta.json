@@ -1,9 +1,11 @@
 {
   "status": "ok",
   "source": "飞书知识库",
-  "dataCutoff": "2026-11-30",
+  "dataCutoff": "2026-11-03",
   "recordCount": 7957,
-  "syncedAt": "2026-11-03 13:19",
+  "syncedAt": "2026-11-03 13:22",
   "updatedBy": "GitHub Actions",
-  "note": "页面运行时读取本文件，用于显示真实的数据截止时间与同步状态。"
+  "futureRecords": 2,
+  "note": "页面运行时读取本文件，用于显示真实的数据截止时间与同步状态。",
+  "warning": "源表有 2 条记录日期晚于今天，未计入截止日，请检查是否为预填或录入错误"
 }
