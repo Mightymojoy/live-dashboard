@@ -3,13 +3,21 @@ name: sync-feishu
 on:
   workflow_dispatch:
   schedule:
-    # 北京时间 09:17 与 13:17（UTC 01:17 / 05:17）
-    # 原来写 30 0 * * *（北京 08:30），正好落在 UTC 00:30——官方文档明确说明
-    # "High load times include the start of every hour. If the load is sufficiently
-    #  high enough, some queued jobs may be dropped"，实测 11-03 08:30 那次就被丢弃。
-    # 改为避开整点区段并加一个备份时点，只要其中一次成功当天数据就是新的。
-    - cron: '17 1 * * *'
-    - cron: '17 5 * * *'
+    # 北京时间 10:07 与 15:07（UTC 02:07 / 07:07）
+    #
+    # 三条硬约束决定了为什么不是 0 2 * * *（北京 10:00 整）：
+    # 1) GitHub cron 一律按 UTC 解释，北京 10:00 必须写 2 时，不是 10 时；
+    # 2) 官方文档明确 "High load times include the start of every hour. If the load
+    #    is sufficiently high enough, some queued jobs may be dropped" ——
+    #    整点边界既有延迟也有被丢弃的风险，因此统一错到 :07；
+    # 3) 单点无备份 = 一次被丢当天就断更。实测 11-04：北京 09:17 那次 schedule
+    #    被丢弃、13:17 那次延迟到 15:29 才启动，故保留下午一个时点兜底，
+    #    两次间隔 5 小时覆盖整个上班时段。
+    #
+    # 注意：schedule 事件只读默认分支（main）上的工作流文件，
+    # 改这里必须同时更新 dist 与 main，否则等于没改。
+    - cron: '7 2 * * *'
+    - cron: '7 7 * * *'
 
 permissions:
   contents: write
