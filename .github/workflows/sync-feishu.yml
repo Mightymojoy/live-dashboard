@@ -10,8 +10,9 @@ on:
     # 2) 官方文档明确 "High load times include the start of every hour. If the load
     #    is sufficiently high enough, some queued jobs may be dropped" ——
     #    整点边界既有延迟也有被丢弃的风险，因此统一错到 :07；
-    # 3) 单点无备份 = 一次被丢当天就断更（11-03 的 30 0 * * * 已实测丢过一次），
-    #    故保留下午一个时点兜底，两次间隔 5 小时覆盖整个上班时段。
+    # 3) 单点无备份 = 一次被丢当天就断更。实测 11-04：北京 09:17 那次 schedule
+    #    被丢弃、13:17 那次延迟到 15:29 才启动，故保留下午一个时点兜底，
+    #    两次间隔 5 小时覆盖整个上班时段。
     #
     # 注意：schedule 事件只读默认分支（main）上的工作流文件，
     # 改这里必须同时更新 dist 与 main，否则等于没改。
