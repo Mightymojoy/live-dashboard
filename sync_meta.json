@@ -1,10 +1,12 @@
 {
-  "status": "ok",
+  "status": "fail",
   "source": "飞书知识库",
   "dataCutoff": "2026-11-08",
   "recordCount": 8054,
   "syncedAt": "2026-11-08 22:14",
   "updatedBy": "GitHub Actions",
   "futureRecords": 0,
-  "note": "页面运行时读取本文件，用于显示真实的数据截止时间与同步状态。"
+  "note": "页面运行时读取本文件，用于显示真实的数据截止时间与同步状态。",
+  "error": "读取单元格范围 0MCIaO!A1:CM800（子表「摩登新贵女」sheet_id=0MCIaO grid=3848行×91列） 失败（飞书 code=90235）",
+  "failedAt": "2026-11-09 10:30"
 }

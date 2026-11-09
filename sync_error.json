@@ -1,0 +1,12 @@
+{
+  "status": "fail",
+  "failedAt": "2026-11-09 10:30",
+  "stage": "读取单元格范围 0MCIaO!A1:CM800（子表「摩登新贵女」sheet_id=0MCIaO grid=3848行×91列）",
+  "feishuCode": 90235,
+  "feishu": {
+    "code": 90235,
+    "data": {},
+    "msg": "Data not ready"
+  },
+  "updatedBy": "GitHub Actions"
+}
