@@ -106,8 +106,10 @@ CHUNK_ROWS = 400
 # 1254607 = Data not ready（多维表格文档中同义错误码）
 # 1255040 = Request timed out（服务端计算超时）
 TRANSIENT_CODES = {90235, 1254607, 1255040}
-# 遇到上述错误时按行对半拆的最大层数：400 → 200 → 100 → 50 → 25
-MAX_SPLIT_DEPTH = 4
+# 遇到上述错误时按行对半拆的最大层数：400 → 200 → 100
+# 不宜更深：2026-11-09 实测拆到 950 个格子（25 行）仍然失败，说明不是体量问题；
+# 而每次 90235 飞书要算约 30 秒才超时，多拆一层就多烧半分钟。
+MAX_SPLIT_DEPTH = 2
 
 
 class NotReady(Exception):
@@ -336,8 +338,9 @@ def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
         return left + right
 
     if code in TRANSIENT_CODES:
-        # 已到最小粒度：先给一次 5 秒的等待重试，仍不行则判定为区域性未就绪
-        time.sleep(5)
+        # 已到最小粒度：给一次短等待（排除瞬时抖动），仍不行则判定区域性未就绪。
+        # 不在这里做多次退避 —— 每次 90235 本身就要 ~30 秒，多试会顶穿作业超时。
+        time.sleep(3)
         data = api_get(token, path, params)
         if data.get("code") == 0:
             return (data.get("data") or {}).get("valueRange", {}).get("values") or []
@@ -402,23 +405,29 @@ def read_sheet(token, st, sheet_id, row_count, col_count, title="", need_headers
     return [head_slice] + rows
 
 
-def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheets, tried_rng=""):
-    """定点探查 90235：是整张表未就绪、某几行坏了，还是取值模式的问题。
+def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheets,
+             tried_rng="", budget_sec=150):
+    """定点探查 90235：是整表未就绪、某几行坏了，还是取值模式的问题。
 
-    全部用小请求（单格 / 单行），十几次就够，代价可忽略；但结论足够把
-    问题锁到「哪一行」「哪张子表」「哪种取值模式」，不必再让人翻日志截图。
+    重要约束（2026-11-09 实测）：飞书返回 90235 之前要先把本次计算跑完，
+    单次耗时约 30 秒才超时。所以探针必须「少而准」，且带总时长预算，
+    否则诊断本身会把作业顶过 timeout。探针按信息量从高到低排列，
+    预算用尽即停，结论仍然成立（前面几条已能定性）。
     """
     lines = []
     nc = max(int(last_col or 1), 1)
     last = col_letter(nc)
+    started = time.time()
 
     def probe(label, rng, render="UnformattedValue"):
+        if time.time() - started > budget_sec:
+            return "timeout"
         params = {"valueRenderOption": render} if render else None
         try:
             d = api_get(token, "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng), params)
         except Exception as exc:
             lines.append("%s → 请求异常 %s" % (label, exc))
-            return None
+            return "error"
         code = d.get("code") or 0
         if code == 0:
             vals = (d.get("data") or {}).get("valueRange", {}).get("values") or []
@@ -427,27 +436,10 @@ def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheet
         lines.append("%s → code=%s %s" % (label, code, d.get("msg", "")))
         return code
 
-    # 1) 纵向：表头能读，数据区第 2 行能不能读
-    probe("表头 A1", "%s!A1" % sheet_id)
+    # 按信息量排序，前面几条决定性质，后面是补充定位
+    # ① 数据区首格：区分「整张表都坏」还是「只有数据区坏」（表头我们已知可读）
     probe("数据区首格 A2", "%s!A2" % sheet_id)
-    probe("首 5 列 A2:%s2" % col_letter(min(5, max(int(last_col or 1), 1))),
-          "%s!A2:%s2" % (sheet_id, col_letter(min(5, max(int(last_col or 1), 1)))))
-    probe("第 2 行全宽 A2:%s2" % last, "%s!A2:%s2" % (sheet_id, last))
-    # 右区单独探两格：本次故障前源表右侧被加了 24 列，若只有右区坏、
-    # 左区（实际取数区）好，就可以靠收窄范围绕过去。
-    for label, col in (("右区 70% 处", col_letter(max(int(nc * 0.7), 1))),
-                       ("最右列", last)):
-        probe("%s %s2" % (label, col), "%s!%s2" % (sheet_id, col))
-    # 2) 抽样若干行：判断是「整段坏」还是「个别行坏」
-    for r in sorted({3, 100, 1000, max(int(row_count or 2) - 1, 2)}):
-        if 2 <= r <= int(row_count or 0):
-            probe("第 %d 行全宽" % r, "%s!A%d:%s%d" % (sheet_id, r, last, r))
-    # 3) 取值模式：同一段换 render，看是否卡在公式计算
-    if tried_rng:
-        probe("失败块改 FormattedValue", tried_rng, "FormattedValue")
-        probe("失败块改 ToString", tried_rng, "ToString")
-        probe("失败块不传 render", tried_rng, None)
-    # 4) 横向：其他子表是否也坏（只取前 5 行）
+    # ② 另一张子表前 5 行：区分「单表坏」还是「整个文档坏」—— 最关键的一条
     for other in want_sheets:
         s = sheets.get(other)
         if not s or s.get("sheet_id") == sheet_id:
@@ -455,6 +447,21 @@ def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheet
         gp = s.get("grid_properties") or {}
         wide = col_letter(max(int(gp.get("column_count") or 1), 1))
         probe("另一子表「%s」前 5 行" % other, "%s!A2:%s6" % (s["sheet_id"], wide))
+    # ③ 末行：区分「整段坏」还是「尾部某些行坏」
+    tail = max(int(row_count or 2) - 1, 2)
+    if 2 <= tail:
+        probe("末行（第 %d 行）" % tail, "%s!A%d:%s%d" % (sheet_id, tail, last, tail))
+    # ④ 取值模式：排除「UnformattedValue 需要重算公式」这一可能
+    if tried_rng:
+        probe("失败块改 FormattedValue", tried_rng, "FormattedValue")
+    # ⑤ 右区单格：本次故障前右侧被加 24 列，确认右区是否独立于左区
+    probe("最右列 %s2" % last, "%s!%s2" % (sheet_id, last))
+    # ⑥ 中部抽样，补充定位（预算允许才跑）
+    for r in (100, 1000):
+        if 2 <= r <= int(row_count or 0):
+            probe("第 %d 行全宽" % r, "%s!A%d:%s%d" % (sheet_id, r, last, r))
+    if time.time() - started > budget_sec:
+        lines.append("（诊断已用 %ds，达到预算上限，后续探针跳过）" % int(time.time() - started))
     return lines
 
 
