@@ -2,6 +2,16 @@ name: sync-feishu
 
 on:
   workflow_dispatch:
+  # 改同步脚本/字段映射时自动跑一次：既省掉「改完还要人点一下」的往返，
+  # 也让每次改动都能立刻拿到真实结果（含诊断注解）。
+  # 只监听这几个路径 —— 同步 bot 自己提交的 live_data.json / sync_meta.json
+  # 不在列表里，因此不会形成触发循环。
+  push:
+    branches: [dist]
+    paths:
+      - 'tools/feishu_sync.py'
+      - 'tools/feishu_field_map.json'
+      - '.github/workflows/sync-feishu.yml'
   schedule:
     # 北京时间 10:07 与 15:07（UTC 02:07 / 07:07）
     #
