@@ -99,7 +99,15 @@ EMPTY_TOKENS = {"", "-", "--", "/", ".", "N/A", "n/a", "NA", "null", "None", "na
                 "NaN", "#DIV/0!", "#VALUE!", "#N/A", "#REF!", "#NAME?"}
 
 EXCEL_EPOCH = datetime.datetime(1899, 12, 30)
-CHUNK_ROWS = 800
+CHUNK_ROWS = 400
+
+# 飞书「数据未就绪」类错误：单次请求计算量过大或前置操作未完成。
+# 90235 = Data not ready（电子表格读值实测命中）
+# 1254607 = Data not ready（多维表格文档中同义错误码）
+# 1255040 = Request timed out（服务端计算超时）
+TRANSIENT_CODES = {90235, 1254607, 1255040}
+# 遇到上述错误时按行对半拆的最大层数：400 → 200 → 100 → 50 → 25
+MAX_SPLIT_DEPTH = 4
 WS_RE = re.compile(r"[\s\u3000]+")
 BEIJING_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
@@ -255,20 +263,27 @@ def list_sheets(token, st):
     return data["data"].get("sheets", [])
 
 
-def read_range(token, st, rng, trace=""):
+def read_range(token, st, rng, trace="", allow_retry=True):
     """UnformattedValue：取原始值而非公式文本，口径与现有 JSON 一致。
 
-    飞书的读表接口偶发限流与抖动（历史上出现过整批 4 次连续失败），
-    因此失败后先等 2 秒重试一次，仍失败才判定为真错误并退出。
-    报错时带上子表名/sheet_id/grid 尺寸，便于一次定位是「范围超界」
-    还是「权限/表格结构被改」。
+    失败后按错误类型分别处置：
+    - 90235 / 1254607 / 1255040（Data not ready、内部计算超时）：属于
+      「单次请求太重或前置操作未完成」，官方文档明确建议降低请求量后重试。
+      这里先整块等 3 秒重试一次，仍失败则把等待时间往上翻倍，累计 4 次。
+      （2026-11-09 起因源表从 67 列涨到 91 列，A1:CM800 一次要 7.8 万个格子，
+       连续 5 次同步全部卡在这里。）
+    - 其他错误：直接判定为真错误退出，不掩盖权限/结构问题。
     """
     path = "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng)
     params = {"valueRenderOption": "UnformattedValue"}
+    waits = (3, 6, 12, 20) if allow_retry else ()
     data = api_get(token, path, params)
-    if data.get("code") != 0:
-        log("      [重试] %s 首次返回 code=%s，2 秒后重试一次" % (rng, data.get("code")))
-        time.sleep(2)
+    for i, wait in enumerate(waits):
+        if data.get("code") == 0 or data.get("code") not in TRANSIENT_CODES:
+            break
+        log("      [重试] %s 返回 code=%s（数据未就绪），%d 秒后第 %d 次重试"
+            % (rng, data.get("code"), wait, i + 1))
+        time.sleep(wait)
         data = api_get(token, path, params)
     if data.get("code") != 0:
         what = "读取单元格范围 %s" % rng
@@ -279,18 +294,83 @@ def read_range(token, st, rng, trace=""):
     return vr.get("values") or []
 
 
-def read_sheet(token, st, sheet_id, row_count, col_count, title=""):
-    rows, start = [], 1
-    last_col = col_letter(max(col_count, 1))
-    trace = "子表「%s」sheet_id=%s grid=%s行×%s列" % (title, sheet_id, row_count, col_count)
+def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
+    """读一个矩形块；遇 90235 类错误就按行对半拆，直到单块小到能算完。
+
+    拆分是「降级」而不是「重试」：飞书返回 Data not ready 的本质是这次
+    请求的计算量超了，单纯等不会好，把块改小才有效。最深拆 4 层
+    （800 → 400 → 200 → 100 → 50 行）。
+    """
+    rng = "%s!%s%d:%s%d" % (sheet_id, col_letter(c1), r1, col_letter(c2), r2)
+    path = "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng)
+    params = {"valueRenderOption": "UnformattedValue"}
+    data = api_get(token, path, params)
+    code = data.get("code")
+
+    if code == 0:
+        return (data.get("data") or {}).get("valueRange", {}).get("values") or []
+
+    if code in TRANSIENT_CODES and r2 > r1 and depth < MAX_SPLIT_DEPTH:
+        mid = (r1 + r2) // 2
+        log("      [降级] %s 返回 code=%s，拆成 %d-%d / %d-%d 两段读取"
+            % (rng, code, r1, mid, mid + 1, r2))
+        left = read_block(token, st, sheet_id, c1, c2, r1, mid, trace, depth + 1)
+        right = read_block(token, st, sheet_id, c1, c2, mid + 1, r2, trace, depth + 1)
+        return left + right
+
+    # 已经拆到最小粒度（或不是可降级的错误）→ 走「等待重试」路径
+    return read_range(token, st, rng, trace)
+
+
+def read_sheet(token, st, sheet_id, row_count, col_count, title="", need_headers=None):
+    """只读「表头里真正需要的那几列」，而不是整张表的全部列。
+
+    源表右侧可能被追加了大量辅助列（2026-11-09 实测从 67 列变 91 列，
+    多出的 24 列我们一个都不用），全量读会把单次请求撑爆。因此：
+    1) 先读第 1 行表头（只 1 行，代价极小），按表头名定位所需列的列号；
+    2) 数据区只取「最小列号..最大列号」这一条竖带，行按 CHUNK_ROWS 分块；
+    3) 返回时把收窄后的表头拼回第一行，build_records 仍按表头名定位列。
+    """
+    last_col = max(int(col_count or 1), 1)
+    trace = "子表「%s」sheet_id=%s grid=%s行×%s列" % (title, sheet_id, row_count, last_col)
+
+    head_block = read_block(token, st, sheet_id, 1, last_col, 1, 1, trace + " 表头")
+    head_cells = list(head_block[0]) if head_block else []
+    header = [norm_header(c) for c in head_cells]
+
+    lo, hi = 1, last_col
+    if need_headers:
+        wanted = [norm_header(h) for h in need_headers]
+        pos = [header.index(h) + 1 for h in wanted if h in header]
+        missing = [h for h in wanted if h not in header]
+        if missing:
+            log("      [提示] 子表「%s」表头缺 %d 个映射列：%s"
+                % (title, len(missing), " / ".join(missing)))
+        if pos:
+            lo, hi = min(pos), min(max(pos), last_col)
+        # 源表被加了列时把列名报出来（annotation 匿名可读），
+        # 便于直接判断「是新增辅助列」还是「关键列被改名/删除」。
+        extra = [h for h in header if h and h not in wanted]
+        if extra:
+            log("      [提示] 子表「%s」另有 %d 个未使用列：%s"
+                % (title, len(extra), " / ".join(extra[:15]) + (" ..." if len(extra) > 15 else "")))
+            print("::notice title=源表存在未使用列::子表「%s」共 %d 列，其中 %d 列未被映射使用：%s"
+                  % (title, last_col, len(extra), " / ".join(extra[:30])), flush=True)
+    if hi - lo + 1 < last_col:
+        log("      %s：grid %d 列 → 实取 %s..%s 共 %d 列"
+            % (title, last_col, col_letter(lo), col_letter(hi), hi - lo + 1))
+
+    rows, start = [], 2
     while start <= row_count:
         end = min(start + CHUNK_ROWS - 1, row_count)
-        block = read_range(token, st, "%s!A%d:%s%d" % (sheet_id, start, last_col, end), trace)
+        block = read_block(token, st, sheet_id, lo, hi, start, end, trace)
         if not block:
             break
         rows.extend(block)
         start = end + 1
-    return rows
+
+    head_slice = head_cells[lo - 1:hi] if head_cells else []
+    return [head_slice] + rows
 
 
 # ---------------- 值归一 ----------------
@@ -608,7 +688,7 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
         gp = s.get("grid_properties") or {}
         rows = read_sheet(token, obj_token, s["sheet_id"],
                           int(gp.get("row_count") or 0), int(gp.get("column_count") or 1),
-                          title=shop)
+                          title=shop, need_headers=list(field_map.values()))
         recs, skipped = build_records(rows, field_map, shop)
         result[shop] = recs
         detail.append("      %s: %d 条（跳过空行 %d）" % (shop, len(recs), skipped))
