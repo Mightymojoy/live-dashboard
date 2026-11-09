@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -40,6 +41,7 @@ ROOT = os.path.dirname(HERE)
 MAP_PATH = os.path.join(HERE, "feishu_field_map.json")
 DATA_PATH = os.path.join(ROOT, "live_data.json")
 META_PATH = os.path.join(ROOT, "sync_meta.json")
+ERROR_PATH = os.path.join(ROOT, "sync_error.json")
 
 # 输出字段顺序（与现有 live_data.json 完全一致，前端已依赖此结构）
 TARGET_FIELDS = [
@@ -178,6 +180,45 @@ def col_letter(n):
     return s
 
 
+def write_error(what, data):
+    """把失败原因落盘，让页面直接可见，不必翻 Actions 日志。
+
+    两条通道：
+    1) sync_error.json —— 完整错误（含飞书 code/msg），供排查；
+    2) sync_meta.json 的 status/error —— 页面状态条直接渲染。
+    工作流用 if: always() 提交，失败也会被推到 dist。
+    """
+    try:
+        stamp = now_beijing().strftime("%Y-%m-%d %H:%M")
+        code = data.get("code") if isinstance(data, dict) else None
+        payload = {
+            "status": "fail",
+            "failedAt": stamp,
+            "stage": what,
+            "feishuCode": code,
+            "feishu": data,
+            "updatedBy": os.environ.get("SYNC_ACTOR", "本地脚本"),
+        }
+        with open(ERROR_PATH, "w", encoding="utf-8") as fp:
+            json.dump(payload, fp, ensure_ascii=False, indent=2)
+
+        meta = {}
+        if os.path.exists(META_PATH):
+            try:
+                with open(META_PATH, encoding="utf-8") as fp:
+                    meta = json.load(fp)
+            except ValueError:
+                meta = {}
+        meta["status"] = "fail"
+        meta["error"] = "%s 失败（飞书 code=%s）" % (what, code)
+        meta["failedAt"] = stamp
+        meta["updatedBy"] = payload["updatedBy"]
+        with open(META_PATH, "w", encoding="utf-8") as fp:
+            json.dump(meta, fp, ensure_ascii=False, indent=2)
+    except Exception as exc:  # 落盘失败不能掩盖原始错误
+        log("[警告] 失败原因落盘时出错: %s" % exc)
+
+
 def fail(code, what, data):
     log("[错误] %s 失败: %s" % (what, data))
     c = data.get("code")
@@ -189,6 +230,14 @@ def fail(code, what, data):
                 "?q=sheets:spreadsheet:readonly&op_from=openapi&token_type=tenant" % app_id)
     elif c in (1254302, 1310249):
         log("       该电子表格未授权给本应用：请在表格「···」→ 文档协作者里添加应用。")
+    # Actions 日志下载需要认证，而 check-run annotation 匿名可读 ——
+    # 把错误详情打成 annotation，下次失败可远程读到，不必让人翻页面截图。
+    try:
+        brief = json.dumps(data, ensure_ascii=False)
+    except Exception:
+        brief = str(data)
+    print("::error title=飞书接口失败::%s | 返回 %s" % (what, brief[:800]), flush=True)
+    write_error(what, data)
     sys.exit(code)
 
 
@@ -206,22 +255,37 @@ def list_sheets(token, st):
     return data["data"].get("sheets", [])
 
 
-def read_range(token, st, rng):
-    """UnformattedValue：取原始值而非公式文本，口径与现有 JSON 一致。"""
+def read_range(token, st, rng, trace=""):
+    """UnformattedValue：取原始值而非公式文本，口径与现有 JSON 一致。
+
+    飞书的读表接口偶发限流与抖动（历史上出现过整批 4 次连续失败），
+    因此失败后先等 2 秒重试一次，仍失败才判定为真错误并退出。
+    报错时带上子表名/sheet_id/grid 尺寸，便于一次定位是「范围超界」
+    还是「权限/表格结构被改」。
+    """
     path = "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng)
-    data = api_get(token, path, {"valueRenderOption": "UnformattedValue"})
+    params = {"valueRenderOption": "UnformattedValue"}
+    data = api_get(token, path, params)
     if data.get("code") != 0:
-        fail(6, "读取单元格范围 %s" % rng, data)
+        log("      [重试] %s 首次返回 code=%s，2 秒后重试一次" % (rng, data.get("code")))
+        time.sleep(2)
+        data = api_get(token, path, params)
+    if data.get("code") != 0:
+        what = "读取单元格范围 %s" % rng
+        if trace:
+            what += "（%s）" % trace
+        fail(6, what, data)
     vr = (data.get("data") or {}).get("valueRange") or {}
     return vr.get("values") or []
 
 
-def read_sheet(token, st, sheet_id, row_count, col_count):
+def read_sheet(token, st, sheet_id, row_count, col_count, title=""):
     rows, start = [], 1
     last_col = col_letter(max(col_count, 1))
+    trace = "子表「%s」sheet_id=%s grid=%s行×%s列" % (title, sheet_id, row_count, col_count)
     while start <= row_count:
         end = min(start + CHUNK_ROWS - 1, row_count)
-        block = read_range(token, st, "%s!A%d:%s%d" % (sheet_id, start, last_col, end))
+        block = read_range(token, st, "%s!A%d:%s%d" % (sheet_id, start, last_col, end), trace)
         if not block:
             break
         rows.extend(block)
@@ -543,7 +607,8 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
             continue
         gp = s.get("grid_properties") or {}
         rows = read_sheet(token, obj_token, s["sheet_id"],
-                          int(gp.get("row_count") or 0), int(gp.get("column_count") or 1))
+                          int(gp.get("row_count") or 0), int(gp.get("column_count") or 1),
+                          title=shop)
         recs, skipped = build_records(rows, field_map, shop)
         result[shop] = recs
         detail.append("      %s: %d 条（跳过空行 %d）" % (shop, len(recs), skipped))
@@ -597,6 +662,12 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
         meta["warning"] = "源表有 %d 条记录日期晚于今天，未计入截止日，请检查是否为预填或录入错误" % new_future
     with open(META_PATH, "w", encoding="utf-8") as fp:
         json.dump(meta, fp, ensure_ascii=False, indent=2)
+    # 成功即清掉上一次的失败记录，避免页面残留旧错误
+    if os.path.exists(ERROR_PATH):
+        try:
+            os.remove(ERROR_PATH)
+        except OSError:
+            pass
     log("      完成：live_data.json %d 条，sync_meta.json 已更新" % new_total)
 
 

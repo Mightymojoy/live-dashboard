@@ -51,10 +51,14 @@ jobs:
         run: python tools/feishu_sync.py --sync
 
       - name: 提交并推送
+        # 必须 always()：同步失败时 sync_meta.json / sync_error.json 也要推到 dist，
+        # 页面才能直接显示失败原因，不必让人去 Actions 翻日志。
+        if: always()
         run: |
           git config user.name "ito-sync-bot"
           git config user.email "ito-sync-bot@users.noreply.github.com"
-          git add live_data.json sync_meta.json
+          git add -A -- live_data.json sync_meta.json 2>/dev/null || true
+          git add -A -- sync_error.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "本次无数据变更，跳过提交"
             exit 0

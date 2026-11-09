@@ -143,6 +143,8 @@
   white-space:nowrap;cursor:pointer;line-height:1.6}
 .update-tl .utl-warn.show{display:inline-flex}
 .update-tl .utl-warn:hover{background:#ffeab3;border-color:#d4ac45}
+.update-tl .utl-warn.err{background:#fdecea;border-color:#f2b8b5;color:#b3261e}
+.update-tl .utl-warn.err:hover{background:#fbdcd8;border-color:#e39a95}
 .update-tl .utl-warn::before{content:"⚠";font-size:11px}
 .update-tl .utl-note{opacity:.75}
 .update-tl .utl-toggle{margin-left:auto;cursor:pointer;color:var(--gold,#c9a962);
@@ -1864,6 +1866,18 @@
     function applyFutureWarn(meta) {
       const el = document.getElementById('utlWarn');
       if (!el) return;
+      // 同步失败优先展示：脚本会把飞书返回的原因回写进 sync_meta.error，
+      // 这样失败原因直接显示在页面上，不必去 Actions 翻日志。
+      if (meta && meta.status === 'fail' && meta.error) {
+        el.textContent = '同步失败：' + meta.error;
+        el.title = meta.error + '（点击查看处理建议）';
+        el.onclick = function () {
+          showSyncToast(meta.error + '。可点击页面右上角「同步飞书数据」重试；若反复失败，请到 GitHub Actions 查看该次运行的完整日志。', 'err', 12000);
+        };
+        el.classList.add('show', 'err');
+        return;
+      }
+      el.classList.remove('err');
       const n = Number((meta && meta.futureRecords) || 0);
       if (!n) {
         el.classList.remove('show');
