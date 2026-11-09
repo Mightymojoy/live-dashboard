@@ -1646,8 +1646,25 @@
 
     function classifyToken(v) {
       if (!v) return { kind: 'empty', label: '未填写' };
-      if (/^github_pat_/.test(v)) return { kind: 'fine', label: 'fine-grained 令牌' };
-      if (/^ghp_/.test(v)) return { kind: 'classic', label: 'classic 令牌' };
+      // GitHub 只在「创建成功那一屏」完整显示一次 PAT；之后在 Tokens 列表里是
+      // github_pat_11ABC•••••••• 这种掩码。从列表页"复制"拿到的值前缀依然合法，
+      // 只校验前缀会放过它，最后由 GitHub 回 401 —— 这里提前拦下来。
+      if (/[•*·…]/.test(v) || /\.{3,}/.test(v)) {
+        return { kind: 'masked', label: '这是掩码，不是完整令牌' };
+      }
+      if (/[^\x21-\x7e]/.test(v)) {
+        return { kind: 'nonascii', label: '含空格或不可见字符' };
+      }
+      if (/^github_pat_/.test(v)) {
+        return v.length < 60
+          ? { kind: 'masked', label: '长度不足（' + v.length + ' 字符），疑似被截断或掩码' }
+          : { kind: 'fine', label: 'fine-grained 令牌' };
+      }
+      if (/^ghp_/.test(v)) {
+        return v.length < 36
+          ? { kind: 'masked', label: '长度不足（' + v.length + ' 字符），疑似被截断或掩码' }
+          : { kind: 'classic', label: 'classic 令牌' };
+      }
       if (/^gh[orsu]_/.test(v)) return { kind: 'other', label: 'OAuth 令牌，不能用于此处' };
       if (/^[0-9a-f]{40}$/i.test(v)) return { kind: 'legacy', label: '旧式 classic 令牌' };
       if (/^[A-Za-z0-9]{28,40}$/.test(v)) return { kind: 'feishu', label: '疑似飞书 App Secret（32 位字母数字）' };
@@ -1877,6 +1894,13 @@
       if (c.kind === 'feishu') {
         setPanelStatus('这是飞书 App Secret，不是 GitHub 令牌。飞书密钥由云端工作流使用，浏览器不需要填。', 'err');
         showSyncToast('这是飞书 App Secret，不能填在这里', 'err', 7000);
+        return;
+      }
+      if (c.kind === 'masked' || c.kind === 'nonascii') {
+        setPanelStatus('这串不能用：' + c.label + '。GitHub 的令牌只在「创建成功那一屏」完整显示一次，' +
+          'Tokens 列表里看到的是 github_pat_11ABC•••• 掩码，复制不出来。请回到列表删除旧令牌后重建，' +
+          '在生成成功那一屏（有绿色提示、只显示一次）立刻复制，再粘到这里。', 'err');
+        showSyncToast('这是掩码或被截断的值，不是完整令牌，未保存', 'err', 10000);
         return;
       }
       if (c.kind === 'empty' || c.kind === 'unknown' || c.kind === 'other') {
