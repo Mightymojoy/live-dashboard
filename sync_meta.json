@@ -7,8 +7,8 @@
   "updatedBy": "GitHub Actions",
   "futureRecords": 0,
   "note": "页面运行时读取本文件，用于显示真实的数据截止时间与同步状态。",
-  "error": "读取单元格范围 0MCIaO!A402:AL501（子表「摩登新贵女」） 失败（飞书 code=90235）",
-  "failedAt": "2026-11-09 11:01",
-  "errorHint": 3,
+  "error": "读取单元格范围 0MCIaO!A2:AL101（子表「摩登新贵女」） 失败（飞书 code=90235）",
+  "failedAt": "2026-11-09 11:09",
+  "errorHint": 4,
   "errorDetail": "已定位明细见 sync_error.json 的 diagnosis"
 }
