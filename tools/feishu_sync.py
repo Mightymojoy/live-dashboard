@@ -108,6 +108,15 @@ CHUNK_ROWS = 400
 TRANSIENT_CODES = {90235, 1254607, 1255040}
 # 遇到上述错误时按行对半拆的最大层数：400 → 200 → 100 → 50 → 25
 MAX_SPLIT_DEPTH = 4
+
+
+class NotReady(Exception):
+    """拆到最小粒度仍报 Data not ready：数据区域在飞书侧未就绪，需定点诊断。"""
+
+    def __init__(self, rng, data):
+        self.rng = rng
+        self.data = data if isinstance(data, dict) else {"raw": str(data)}
+        Exception.__init__(self, "读取 %s 时飞书返回 code=%s" % (rng, self.data.get("code")))
 WS_RE = re.compile(r"[\s\u3000]+")
 BEIJING_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
@@ -188,11 +197,11 @@ def col_letter(n):
     return s
 
 
-def write_error(what, data):
+def write_error(what, data, diag=None):
     """把失败原因落盘，让页面直接可见，不必翻 Actions 日志。
 
     两条通道：
-    1) sync_error.json —— 完整错误（含飞书 code/msg），供排查；
+    1) sync_error.json —— 完整错误（含飞书 code/msg + 定点诊断明细），供排查；
     2) sync_meta.json 的 status/error —— 页面状态条直接渲染。
     工作流用 if: always() 提交，失败也会被推到 dist。
     """
@@ -207,6 +216,8 @@ def write_error(what, data):
             "feishu": data,
             "updatedBy": os.environ.get("SYNC_ACTOR", "本地脚本"),
         }
+        if diag:
+            payload["diagnosis"] = list(diag)
         with open(ERROR_PATH, "w", encoding="utf-8") as fp:
             json.dump(payload, fp, ensure_ascii=False, indent=2)
 
@@ -219,6 +230,9 @@ def write_error(what, data):
                 meta = {}
         meta["status"] = "fail"
         meta["error"] = "%s 失败（飞书 code=%s）" % (what, code)
+        if diag:
+            meta["errorHint"] = sum(1 for x in diag if " → OK" in x)
+            meta["errorDetail"] = "已定位明细见 sync_error.json 的 diagnosis"
         meta["failedAt"] = stamp
         meta["updatedBy"] = payload["updatedBy"]
         with open(META_PATH, "w", encoding="utf-8") as fp:
@@ -297,9 +311,12 @@ def read_range(token, st, rng, trace="", allow_retry=True):
 def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
     """读一个矩形块；遇 90235 类错误就按行对半拆，直到单块小到能算完。
 
-    拆分是「降级」而不是「重试」：飞书返回 Data not ready 的本质是这次
-    请求的计算量超了，单纯等不会好，把块改小才有效。最深拆 4 层
-    （800 → 400 → 200 → 100 → 50 行）。
+    拆分是「降级」而不是「重试」：若 90235 真是因为单次计算量过大，
+    把块改小才有效。最深拆 4 层（400 → 200 → 100 → 50 → 25 行）。
+
+    若拆到最小粒度仍报 90235（2026-11-09 实测：950 个格子也失败），
+    说明不是体量问题，而是该区域数据在飞书侧「未就绪」。此时抛
+    NotReady 交给上层做定点诊断，而不是盲目重试或直接退出。
     """
     rng = "%s!%s%d:%s%d" % (sheet_id, col_letter(c1), r1, col_letter(c2), r2)
     path = "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng)
@@ -318,8 +335,20 @@ def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
         right = read_block(token, st, sheet_id, c1, c2, mid + 1, r2, trace, depth + 1)
         return left + right
 
-    # 已经拆到最小粒度（或不是可降级的错误）→ 走「等待重试」路径
-    return read_range(token, st, rng, trace)
+    if code in TRANSIENT_CODES:
+        # 已到最小粒度：先给一次 5 秒的等待重试，仍不行则判定为区域性未就绪
+        time.sleep(5)
+        data = api_get(token, path, params)
+        if data.get("code") == 0:
+            return (data.get("data") or {}).get("valueRange", {}).get("values") or []
+        if data.get("code") in TRANSIENT_CODES:
+            raise NotReady(rng, data)
+        code = data.get("code")
+
+    what = "读取单元格范围 %s" % rng
+    if trace:
+        what += "（%s）" % trace
+    fail(6, what, data)
 
 
 def read_sheet(token, st, sheet_id, row_count, col_count, title="", need_headers=None):
@@ -371,6 +400,62 @@ def read_sheet(token, st, sheet_id, row_count, col_count, title="", need_headers
 
     head_slice = head_cells[lo - 1:hi] if head_cells else []
     return [head_slice] + rows
+
+
+def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheets, tried_rng=""):
+    """定点探查 90235：是整张表未就绪、某几行坏了，还是取值模式的问题。
+
+    全部用小请求（单格 / 单行），十几次就够，代价可忽略；但结论足够把
+    问题锁到「哪一行」「哪张子表」「哪种取值模式」，不必再让人翻日志截图。
+    """
+    lines = []
+    nc = max(int(last_col or 1), 1)
+    last = col_letter(nc)
+
+    def probe(label, rng, render="UnformattedValue"):
+        params = {"valueRenderOption": render} if render else None
+        try:
+            d = api_get(token, "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng), params)
+        except Exception as exc:
+            lines.append("%s → 请求异常 %s" % (label, exc))
+            return None
+        code = d.get("code") or 0
+        if code == 0:
+            vals = (d.get("data") or {}).get("valueRange", {}).get("values") or []
+            lines.append("%s → OK（%d 行）" % (label, len(vals)))
+            return 0
+        lines.append("%s → code=%s %s" % (label, code, d.get("msg", "")))
+        return code
+
+    # 1) 纵向：表头能读，数据区第 2 行能不能读
+    probe("表头 A1", "%s!A1" % sheet_id)
+    probe("数据区首格 A2", "%s!A2" % sheet_id)
+    probe("首 5 列 A2:%s2" % col_letter(min(5, max(int(last_col or 1), 1))),
+          "%s!A2:%s2" % (sheet_id, col_letter(min(5, max(int(last_col or 1), 1)))))
+    probe("第 2 行全宽 A2:%s2" % last, "%s!A2:%s2" % (sheet_id, last))
+    # 右区单独探两格：本次故障前源表右侧被加了 24 列，若只有右区坏、
+    # 左区（实际取数区）好，就可以靠收窄范围绕过去。
+    for label, col in (("右区 70% 处", col_letter(max(int(nc * 0.7), 1))),
+                       ("最右列", last)):
+        probe("%s %s2" % (label, col), "%s!%s2" % (sheet_id, col))
+    # 2) 抽样若干行：判断是「整段坏」还是「个别行坏」
+    for r in sorted({3, 100, 1000, max(int(row_count or 2) - 1, 2)}):
+        if 2 <= r <= int(row_count or 0):
+            probe("第 %d 行全宽" % r, "%s!A%d:%s%d" % (sheet_id, r, last, r))
+    # 3) 取值模式：同一段换 render，看是否卡在公式计算
+    if tried_rng:
+        probe("失败块改 FormattedValue", tried_rng, "FormattedValue")
+        probe("失败块改 ToString", tried_rng, "ToString")
+        probe("失败块不传 render", tried_rng, None)
+    # 4) 横向：其他子表是否也坏（只取前 5 行）
+    for other in want_sheets:
+        s = sheets.get(other)
+        if not s or s.get("sheet_id") == sheet_id:
+            continue
+        gp = s.get("grid_properties") or {}
+        wide = col_letter(max(int(gp.get("column_count") or 1), 1))
+        probe("另一子表「%s」前 5 行" % other, "%s!A2:%s6" % (s["sheet_id"], wide))
+    return lines
 
 
 # ---------------- 值归一 ----------------
@@ -686,9 +771,19 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
             log("      [跳过] 飞书侧没有子表「%s」" % shop)
             continue
         gp = s.get("grid_properties") or {}
-        rows = read_sheet(token, obj_token, s["sheet_id"],
-                          int(gp.get("row_count") or 0), int(gp.get("column_count") or 1),
-                          title=shop, need_headers=list(field_map.values()))
+        rc, cc = int(gp.get("row_count") or 0), int(gp.get("column_count") or 1)
+        try:
+            rows = read_sheet(token, obj_token, s["sheet_id"], rc, cc,
+                              title=shop, need_headers=list(field_map.values()))
+        except NotReady as exc:
+            log("      [诊断] 子表「%s」拆到最小粒度仍报 Data not ready，开始定点探查…" % shop)
+            lines = diagnose(token, obj_token, s["sheet_id"], shop, cc, rc,
+                             sheets, want_sheets, exc.rng)
+            for ln in lines:
+                log("             " + ln)
+            print("::error title=90235 定位::%s" % "%0A".join(lines)[:2200], flush=True)
+            write_error("读取单元格范围 %s（子表「%s」）" % (exc.rng, shop), exc.data, lines)
+            sys.exit(6)
         recs, skipped = build_records(rows, field_map, shop)
         result[shop] = recs
         detail.append("      %s: %d 条（跳过空行 %d）" % (shop, len(recs), skipped))
