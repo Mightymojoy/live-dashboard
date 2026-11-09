@@ -947,12 +947,13 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
         meta["warning"] = "源表有 %d 条记录日期晚于今天，未计入截止日，请检查是否为预填或录入错误" % new_future
     with open(META_PATH, "w", encoding="utf-8") as fp:
         json.dump(meta, fp, ensure_ascii=False, indent=2)
-    # 成功即清掉上一次的失败记录，避免页面残留旧错误
-    if os.path.exists(ERROR_PATH):
-        try:
-            os.remove(ERROR_PATH)
-        except OSError:
-            pass
+    # 成功即清掉上一次的失败记录与探测报告，避免页面/仓库残留旧结论
+    for stale in (ERROR_PATH, PROBE_PATH):
+        if os.path.exists(stale):
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
     log("      完成：live_data.json %d 条，sync_meta.json 已更新" % new_total)
 
 
