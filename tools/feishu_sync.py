@@ -42,6 +42,7 @@ MAP_PATH = os.path.join(HERE, "feishu_field_map.json")
 DATA_PATH = os.path.join(ROOT, "live_data.json")
 META_PATH = os.path.join(ROOT, "sync_meta.json")
 ERROR_PATH = os.path.join(ROOT, "sync_error.json")
+PROBE_PATH = os.path.join(ROOT, "sync_probe.json")
 
 # 输出字段顺序（与现有 live_data.json 完全一致，前端已依赖此结构）
 TARGET_FIELDS = [
@@ -107,6 +108,12 @@ CHUNK_ROWS = 400
 # 1255040 = Request timed out（服务端计算超时）
 # -1：本地连接超时/网络错误（读值时飞书可能长时间不回包）
 TRANSIENT_CODES = {90235, 1254607, 1255040, -1}
+
+# 本次运行里有多少数据块是靠 FormattedValue 才取到的（口径与原来不同，需比对）
+FALLBACK = {"count": 0, "blocks": [], "switched": False}
+# 当前取数口径。默认 UnformattedValue（与历史数据同源）；一旦实测证明它不可用，
+# 整轮切到 FormattedValue，并由上层做数值一致性比对后再决定能否落盘。
+RENDER_MODE = {"mode": "UnformattedValue"}
 # 遇到上述错误时按行对半拆的最大层数：400 → 200 → 100
 # 不宜更深：2026-11-09 实测拆到 950 个格子（25 行）仍然失败，说明不是体量问题；
 # 而每次 90235 飞书要算约 30 秒才超时，多拆一层就多烧半分钟。
@@ -322,25 +329,47 @@ def read_range(token, st, rng, trace="", allow_retry=True):
 
 
 def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
-    """读一个矩形块；遇 90235 类错误就按行对半拆，直到单块小到能算完。
+    """读一个矩形块。三级降级：等待重试 → 换取值模式 → 按行对半拆。
 
-    拆分是「降级」而不是「重试」：若 90235 真是因为单次计算量过大，
-    把块改小才有效。最深拆 4 层（400 → 200 → 100 → 50 → 25 行）。
-
-    若拆到最小粒度仍报 90235（2026-11-09 实测：950 个格子也失败），
-    说明不是体量问题，而是该区域数据在飞书侧「未就绪」。此时抛
-    NotReady 交给上层做定点诊断，而不是盲目重试或直接退出。
+    2026-11-09 的实测序列把优先级定死了：
+    - 四张子表用 UnformattedValue 全部 90235，连 5 行都失败；
+    - 同一块改用 FormattedValue 立刻取到 100 行；
+    - 拆到 25 行（950 格）仍然失败 ⇒ 与数据量无关。
+    所以遇到 90235 时先「换模式」而不是先「拆块」：换模式是 1 次请求就能
+    定性的，拆块则是每次都吃满 45 秒超时。一旦某个块证明只能靠
+    FormattedValue 取，就把整轮切过去（RENDER_MODE），避免每个块重复踩坑。
     """
     rng = "%s!%s%d:%s%d" % (sheet_id, col_letter(c1), r1, col_letter(c2), r2)
     path = "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng)
-    params = {"valueRenderOption": "UnformattedValue"}
+    params = {"valueRenderOption": RENDER_MODE["mode"]}
     data = api_get(token, path, params, timeout=READ_TIMEOUT)
     code = data.get("code")
 
     if code == 0:
+        if RENDER_MODE["mode"] != "UnformattedValue":
+            FALLBACK["count"] += 1
+            if len(FALLBACK["blocks"]) < 40:
+                FALLBACK["blocks"].append(rng)
         return (data.get("data") or {}).get("valueRange", {}).get("values") or []
 
+    if code in TRANSIENT_CODES and RENDER_MODE["mode"] == "UnformattedValue":
+        # ① 先试换取值模式：UnformattedValue 要服务端把公式全部重算完，
+        #    FormattedValue 读的是已渲染值，走另一条计算路径。
+        alt = api_get(token, path, {"valueRenderOption": "FormattedValue"},
+                      timeout=READ_TIMEOUT)
+        if alt.get("code") == 0:
+            RENDER_MODE["mode"] = "FormattedValue"
+            FALLBACK["switched"] = True
+            FALLBACK["count"] += 1
+            if len(FALLBACK["blocks"]) < 40:
+                FALLBACK["blocks"].append(rng)
+            vals = (alt.get("data") or {}).get("valueRange", {}).get("values") or []
+            log("      [降级] UnformattedValue 不可用（code=%s），整轮改用 "
+                "FormattedValue；首块 %s 取到 %d 行" % (code, rng, len(vals)))
+            return vals
+
     if code in TRANSIENT_CODES and r2 > r1 and depth < MAX_SPLIT_DEPTH:
+        # ② 换模式也不行 → 按行对半拆（万一是体量问题，拆小仍有救）
         mid = (r1 + r2) // 2
         log("      [降级] %s 返回 code=%s，拆成 %d-%d / %d-%d 两段读取"
             % (rng, code, r1, mid, mid + 1, r2))
@@ -349,8 +378,7 @@ def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
         return left + right
 
     if code in TRANSIENT_CODES:
-        # 已到最小粒度：给一次短等待（排除瞬时抖动），仍不行则判定区域性未就绪。
-        # 不在这里做多次退避 —— 每次 90235 本身就要 ~30 秒，多试会顶穿作业超时。
+        # ③ 已到最小粒度：给一次短等待（排除瞬时抖动），仍失败就交给上层诊断
         time.sleep(3)
         data = api_get(token, path, params, timeout=READ_TIMEOUT)
         if data.get("code") == 0:
@@ -450,7 +478,8 @@ def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheet
 
     # 按信息量排序，前面几条决定性质，后面是补充定位
     # ① 数据区首格：区分「整张表都坏」还是「只有数据区坏」（表头我们已知可读）
-    probe("数据区首格 A2", "%s!A2" % sheet_id)
+    #    注意必须写成 A2:A2 —— 单格写 A2 会被飞书判为 90202 wrong range。
+    probe("数据区首格 A2", "%s!A2:A2" % sheet_id)
     # ② 另一张子表前 5 行：区分「单表坏」还是「整个文档坏」—— 最关键的一条
     for other in want_sheets:
         s = sheets.get(other)
@@ -467,7 +496,7 @@ def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheet
     if tried_rng:
         probe("失败块改 FormattedValue", tried_rng, "FormattedValue")
     # ⑤ 右区单格：本次故障前右侧被加 24 列，确认右区是否独立于左区
-    probe("最右列 %s2" % last, "%s!%s2" % (sheet_id, last))
+    probe("最右列 %s2" % last, "%s!%s2:%s2" % (sheet_id, last, last))
     # ⑥ 中部抽样，补充定位（预算允许才跑）
     for r in (100, 1000):
         if 2 <= r <= int(row_count or 0):
@@ -774,6 +803,52 @@ def validate(prev, result):
     return errors
 
 
+AGG_FIELDS = ("sales", "uv", "buyers", "exposureUsers")
+
+
+def aggregate(records):
+    """按 (店铺, 日期) 汇总关键数值，作为两条取数路径的比对指纹。
+
+    用汇总而不是逐行比对，是因为行序/空行会让 id 漂移；而按「店铺+日期」
+    汇总后，任何取数口径变化（百分比被渲染、金额被四舍五入）都会在合计上
+    体现出来，且与行序无关。
+    """
+    out = {}
+    for shop, recs in records.items():
+        for r in recs:
+            k = (shop, str(r.get("date") or ""))
+            a = out.setdefault(k, {"n": 0})
+            a["n"] += 1
+            for f in AGG_FIELDS:
+                v = r.get(f)
+                a[f] = a.get(f, 0.0) + (float(v) if isinstance(v, (int, float)) else 0.0)
+    return out
+
+
+def compare_records(prev, cur, tol_rel=1e-9):
+    """比对两条取数路径的结果，返回差异摘要（用于决定能否切换口径）。"""
+    a, b = aggregate(prev), aggregate(cur)
+    keys = sorted(set(a) & set(b))
+    diffs = []
+    for k in keys:
+        if a[k]["n"] != b[k]["n"]:
+            diffs.append({"shop": k[0], "date": k[1], "field": "count",
+                          "prev": a[k]["n"], "cur": b[k]["n"]})
+        for f in AGG_FIELDS:
+            x, y = a[k].get(f, 0.0), b[k].get(f, 0.0)
+            if abs(x - y) > max(1e-9, abs(x) * tol_rel):
+                diffs.append({"shop": k[0], "date": k[1], "field": f,
+                              "prev": round(x, 6), "cur": round(y, 6),
+                              "delta": round(y - x, 6)})
+    return {
+        "comparedGroups": len(keys),
+        "onlyInPrev": len(set(a) - set(b)),
+        "onlyInCur": len(set(b) - set(a)),
+        "diffCount": len(diffs),
+        "sample": diffs[:30],
+    }
+
+
 def cmd_sync(token, obj_type, obj_token, dry_run=False):
     if obj_type != "sheet":
         log("[中止] 当前节点类型 %s，本脚本只支持电子表格。" % obj_type)
@@ -823,6 +898,39 @@ def cmd_sync(token, obj_type, obj_token, dry_run=False):
                 prev = json.load(fp)
         except ValueError:
             prev = {}
+
+    # 本次有数据块是靠 FormattedValue 才取到的 —— 口径与历史数据不同，
+    # 先做一致性比对、只写探测报告，绝不覆盖 live_data.json。
+    # 只有比对通过（差异 0 或可解释）才值得切换取数口径。
+    if FALLBACK["count"]:
+        cmp = compare_records(prev, result)
+        probe = {
+            "mode": "formatted-fallback",
+            "at": now_beijing().strftime("%Y-%m-%d %H:%M"),
+            "fallbackBlocks": FALLBACK["count"],
+            "fallbackSamples": FALLBACK["blocks"][:12],
+            "recordCount": new_total,
+            "perStore": {k: len(v) for k, v in result.items()},
+            "vsPrev": cmp,
+            "perStorePrev": {k: len(v) for k, v in (prev or {}).items()},
+            "note": "本次未覆盖 live_data.json。vsPrev.diffCount=0 才说明 "
+                    "FormattedValue 与 UnformattedValue 口径一致，可以切换。",
+        }
+        with open(PROBE_PATH, "w", encoding="utf-8") as fp:
+            json.dump(probe, fp, ensure_ascii=False, indent=2)
+        log("      [探测] %d 个块降级为 FormattedValue" % FALLBACK["count"])
+        log("      [探测] 与上次数据比对：共同分组 %d，差异 %d 项（仅上次有 %d / 仅本次有 %d）"
+            % (cmp["comparedGroups"], cmp["diffCount"], cmp["onlyInPrev"], cmp["onlyInCur"]))
+        for s in cmp["sample"][:5]:
+            log("             %s %s %s: %s → %s" % (s["shop"], s["date"], s["field"],
+                                                    s.get("prev"), s.get("cur")))
+        print("::notice title=FormattedValue 一致性比对::共同分组 %d，差异 %d 项，"
+              "仅上次有 %d 组、仅本次有 %d 组；明细见 sync_probe.json"
+              % (cmp["comparedGroups"], cmp["diffCount"], cmp["onlyInPrev"], cmp["onlyInCur"]),
+              flush=True)
+        log("[探测结束] 未写入 live_data.json。比对结果确认后再切换口径。")
+        return
+
     errors = validate(prev, result)
     if errors:
         for e in errors:
