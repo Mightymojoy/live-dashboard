@@ -1,12 +1,23 @@
 {
   "status": "fail",
-  "failedAt": "2026-11-09 10:43",
-  "stage": "读取单元格范围 0MCIaO!A2:AL26（子表「摩登新贵女」sheet_id=0MCIaO grid=3848行×91列）",
+  "failedAt": "2026-11-09 11:01",
+  "stage": "读取单元格范围 0MCIaO!A402:AL501（子表「摩登新贵女」）",
   "feishuCode": 90235,
   "feishu": {
     "code": 90235,
     "data": {},
     "msg": "Data not ready"
   },
-  "updatedBy": "GitHub Actions"
+  "updatedBy": "GitHub Actions",
+  "diagnosis": [
+    "数据区首格 A2 → code=90202 wrong range=0MCIaO!A2",
+    "另一子表「轻熟质享客」前 5 行 → code=90235 Data not ready",
+    "另一子表「云端商务家」前 5 行 → code=90235 Data not ready",
+    "另一子表「视频号」前 5 行 → code=90235 Data not ready",
+    "末行（第 3847 行） → OK（1 行）",
+    "失败块改 FormattedValue → OK（100 行）",
+    "最右列 BO2 → code=90202 wrong range=0MCIaO!BO2",
+    "第 100 行全宽 → OK（1 行）",
+    "第 1000 行全宽 → code=90235 Data not ready"
+  ]
 }
