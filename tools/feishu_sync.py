@@ -110,16 +110,7 @@ CHUNK_ROWS = 400
 TRANSIENT_CODES = {90235, 1254607, 1255040, -1}
 
 # 本次运行里有多少数据块是靠 FormattedValue 才取到的（口径与原来不同，需比对）
-FALLBACK = {"count": 0, "blocks": [], "switched": False}
-# 当前取数口径。默认 UnformattedValue（与历史数据同源）；一旦实测证明它不可用，
-# 整轮切到 FormattedValue，并由上层做数值一致性比对后再决定能否落盘。
-RENDER_MODE = {"mode": "UnformattedValue"}
-# 拆块层数：0 = 不拆。
-# 2026-11-09 两次实测互相矛盾（同一请求两次结果互换：第 100 行一次 OK 一次
-# 90235，第 1000 行一次 90235 一次 OK，FormattedValue 一次 OK 一次失败），
-# 说明 90235 不是「体量太大」，而是服务端数据块的瞬时可用性。拆块只在每次
-# 失败上多烧 45 秒，收益为零，因此停用；改成「换模式 + 定点诊断」。
-MAX_SPLIT_DEPTH = 0
+FALLBACK = {"count": 0, "blocks": []}
 # 读值单次超时。遇 90235 时飞书要算到超时才回包（实测吃满 120 秒），
 # 压到 45 秒能把"失败链"从十分钟级降到分钟级；正常读 400 行 x 27 列仅 1-3 秒。
 READ_TIMEOUT = 45
@@ -331,62 +322,50 @@ def read_range(token, st, rng, trace="", allow_retry=True):
 
 
 def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
-    """读一个矩形块。三级降级：等待重试 → 换取值模式 → 按行对半拆。
+    """读一个矩形块：UnformattedValue 最多重试 3 次，仍不行才对该块降级。
 
-    2026-11-09 的实测序列把优先级定死了：
-    - 四张子表用 UnformattedValue 全部 90235，连 5 行都失败；
-    - 同一块改用 FormattedValue 立刻取到 100 行；
-    - 拆到 25 行（950 格）仍然失败 ⇒ 与数据量无关。
-    所以遇到 90235 时先「换模式」而不是先「拆块」：换模式是 1 次请求就能
-    定性的，拆块则是每次都吃满 45 秒超时。一旦某个块证明只能靠
-    FormattedValue 取，就把整轮切过去（RENDER_MODE），避免每个块重复踩坑。
+    2026-11-09 三次实测把结论钉死了：
+    1) 同一请求两次结果互换（第 100 行一次 OK 一次 90235）⇒ 失败是散发的、
+       瞬时的，不是体量问题 ⇒ 拆块无效，已停用；
+    2) 一轮 40 个块里只有 14 个需要降级 ⇒ UnformattedValue 大多数时候是好的
+       ⇒ 不该一失败就整轮换模式；
+    3) 整轮换 FormattedValue 后，销售额被显示格式取整（5706.29→5706.0，
+       1156 组里 293 组有差）⇒ FormattedValue 不能作为常规口径。
+
+    因此：主路径坚持 UnformattedValue + 重试；降级只作用于个别块，且会被
+    记录下来，由上层决定是否允许落盘（有降级就只写探测报告，不覆盖数据）。
     """
     rng = "%s!%s%d:%s%d" % (sheet_id, col_letter(c1), r1, col_letter(c2), r2)
     path = "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng)
-    params = {"valueRenderOption": RENDER_MODE["mode"]}
-    data = api_get(token, path, params, timeout=READ_TIMEOUT)
-    code = data.get("code")
+    params = {"valueRenderOption": "UnformattedValue"}
 
-    if code == 0:
-        if RENDER_MODE["mode"] != "UnformattedValue":
-            FALLBACK["count"] += 1
-            if len(FALLBACK["blocks"]) < 40:
-                FALLBACK["blocks"].append(rng)
-        return (data.get("data") or {}).get("valueRange", {}).get("values") or []
+    data = {}
+    for attempt, wait in enumerate((0, 3, 8)):
+        if wait:
+            time.sleep(wait)
+        data = api_get(token, path, params, timeout=READ_TIMEOUT)
+        if data.get("code") == 0:
+            return (data.get("data") or {}).get("valueRange", {}).get("values") or []
+        if data.get("code") not in TRANSIENT_CODES:
+            what = "读取单元格范围 %s" % rng
+            if trace:
+                what += "（%s）" % trace
+            fail(6, what, data)
+        log("      [重试 %d/3] %s 返回 code=%s" % (attempt + 1, rng, data.get("code")))
 
-    if code in TRANSIENT_CODES and RENDER_MODE["mode"] == "UnformattedValue":
-        # ① 先试换取值模式：UnformattedValue 要服务端把公式全部重算完，
-        #    FormattedValue 读的是已渲染值，走另一条计算路径。
-        alt = api_get(token, path, {"valueRenderOption": "FormattedValue"},
-                      timeout=READ_TIMEOUT)
-        if alt.get("code") == 0:
-            RENDER_MODE["mode"] = "FormattedValue"
-            FALLBACK["switched"] = True
-            FALLBACK["count"] += 1
-            if len(FALLBACK["blocks"]) < 40:
-                FALLBACK["blocks"].append(rng)
-            vals = (alt.get("data") or {}).get("valueRange", {}).get("values") or []
-            log("      [降级] UnformattedValue 不可用（code=%s），整轮改用 "
-                "FormattedValue；首块 %s 取到 %d 行" % (code, rng, len(vals)))
-            return vals
+    # 该块三次都失败 → 只对这一块降级，并记下来（数值可能被显示格式取整）
+    alt = api_get(token, path, {"valueRenderOption": "FormattedValue"},
+                  timeout=READ_TIMEOUT)
+    if alt.get("code") == 0:
+        vals = (alt.get("data") or {}).get("valueRange", {}).get("values") or []
+        FALLBACK["count"] += 1
+        if len(FALLBACK["blocks"]) < 40:
+            FALLBACK["blocks"].append(rng)
+        log("      [降级] %s 该块改用 FormattedValue（%d 行），数值可能被显示格式取整"
+            % (rng, len(vals)))
+        return vals
 
-    if code in TRANSIENT_CODES and r2 > r1 and depth < MAX_SPLIT_DEPTH:
-        # ② 换模式也不行 → 按行对半拆（万一是体量问题，拆小仍有救）
-        mid = (r1 + r2) // 2
-        log("      [降级] %s 返回 code=%s，拆成 %d-%d / %d-%d 两段读取"
-            % (rng, code, r1, mid, mid + 1, r2))
-        left = read_block(token, st, sheet_id, c1, c2, r1, mid, trace, depth + 1)
-        right = read_block(token, st, sheet_id, c1, c2, mid + 1, r2, trace, depth + 1)
-        return left + right
-
-    if code in TRANSIENT_CODES:
-        # 两种取值模式都试过了 → 直接交给上层诊断，不再烧超时硬试
-        raise NotReady(rng, data)
-
-    what = "读取单元格范围 %s" % rng
-    if trace:
-        what += "（%s）" % trace
-    fail(6, what, data)
+    raise NotReady(rng, data)
 
 
 def read_sheet(token, st, sheet_id, row_count, col_count, title="", need_headers=None):
