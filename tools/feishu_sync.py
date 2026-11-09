@@ -114,10 +114,12 @@ FALLBACK = {"count": 0, "blocks": [], "switched": False}
 # 当前取数口径。默认 UnformattedValue（与历史数据同源）；一旦实测证明它不可用，
 # 整轮切到 FormattedValue，并由上层做数值一致性比对后再决定能否落盘。
 RENDER_MODE = {"mode": "UnformattedValue"}
-# 遇到上述错误时按行对半拆的最大层数：400 → 200 → 100
-# 不宜更深：2026-11-09 实测拆到 950 个格子（25 行）仍然失败，说明不是体量问题；
-# 而每次 90235 飞书要算约 30 秒才超时，多拆一层就多烧半分钟。
-MAX_SPLIT_DEPTH = 2
+# 拆块层数：0 = 不拆。
+# 2026-11-09 两次实测互相矛盾（同一请求两次结果互换：第 100 行一次 OK 一次
+# 90235，第 1000 行一次 90235 一次 OK，FormattedValue 一次 OK 一次失败），
+# 说明 90235 不是「体量太大」，而是服务端数据块的瞬时可用性。拆块只在每次
+# 失败上多烧 45 秒，收益为零，因此停用；改成「换模式 + 定点诊断」。
+MAX_SPLIT_DEPTH = 0
 # 读值单次超时。遇 90235 时飞书要算到超时才回包（实测吃满 120 秒），
 # 压到 45 秒能把"失败链"从十分钟级降到分钟级；正常读 400 行 x 27 列仅 1-3 秒。
 READ_TIMEOUT = 45
@@ -378,14 +380,8 @@ def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
         return left + right
 
     if code in TRANSIENT_CODES:
-        # ③ 已到最小粒度：给一次短等待（排除瞬时抖动），仍失败就交给上层诊断
-        time.sleep(3)
-        data = api_get(token, path, params, timeout=READ_TIMEOUT)
-        if data.get("code") == 0:
-            return (data.get("data") or {}).get("valueRange", {}).get("values") or []
-        if data.get("code") in TRANSIENT_CODES:
-            raise NotReady(rng, data)
-        code = data.get("code")
+        # 两种取值模式都试过了 → 直接交给上层诊断，不再烧超时硬试
+        raise NotReady(rng, data)
 
     what = "读取单元格范围 %s" % rng
     if trace:
@@ -476,31 +472,39 @@ def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheet
         lines.append("%s → code=%s %s" % (label, code, d.get("msg", "")))
         return code
 
-    # 按信息量排序，前面几条决定性质，后面是补充定位
-    # ① 数据区首格：区分「整张表都坏」还是「只有数据区坏」（表头我们已知可读）
-    #    注意必须写成 A2:A2 —— 单格写 A2 会被飞书判为 90202 wrong range。
-    probe("数据区首格 A2", "%s!A2:A2" % sheet_id)
-    # ② 另一张子表前 5 行：区分「单表坏」还是「整个文档坏」—— 最关键的一条
+    # 按信息量排序：先做「同形状 × 不同取值模式」的横向对照，这是能一次性
+    # 区分「模式问题」与「随机问题」的关键；再探备用通道；最后看是否全库一致。
+    # ① 基准：同宽度只读 1 行
+    probe("1 行 A2:%s2" % last, "%s!A2:%s2" % (sheet_id, last))
+    # ② 同形状 5 行，四种取值模式横评（tried_rng 用实际失败块，形状更贴近现场）
+    five = "%s!A2:%s6" % (sheet_id, last)
+    probe("5 行 UnformattedValue", five, "UnformattedValue")
+    probe("5 行 FormattedValue", five, "FormattedValue")
+    probe("5 行 ToString", five, "ToString")
+    probe("5 行 不传 render", five, None)
+    # ③ 同一请求原样重复一次：两次结果不同 = 随机，可直接判死「体量说」
+    probe("5 行 UnformattedValue 重复", five, "UnformattedValue")
+    # ④ 备用通道：把整表导出成 xlsx（绕开读值接口）。仅探「能否建任务」，
+    #    不下载、不落盘；返回 99991672 说明缺导出权限，需在开发者后台开。
+    if time.time() - started <= budget_sec:
+        try:
+            d = http_json("POST", "/drive/v1/export_tasks", token=token,
+                          payload={"file_extension": "xlsx", "token": st, "type": "sheet"},
+                          timeout=PROBE_TIMEOUT)
+            lines.append("导出接口 xlsx → code=%s %s" % (d.get("code") or 0, d.get("msg", "")))
+        except Exception as exc:
+            lines.append("导出接口 xlsx → 异常 %s" % exc)
+    # ⑤ 其他子表 5 行：判断是全库一致还是只有本表
     for other in want_sheets:
         s = sheets.get(other)
         if not s or s.get("sheet_id") == sheet_id:
             continue
         gp = s.get("grid_properties") or {}
         wide = col_letter(max(int(gp.get("column_count") or 1), 1))
-        probe("另一子表「%s」前 5 行" % other, "%s!A2:%s6" % (s["sheet_id"], wide))
-    # ③ 末行：区分「整段坏」还是「尾部某些行坏」
-    tail = max(int(row_count or 2) - 1, 2)
-    if 2 <= tail:
-        probe("末行（第 %d 行）" % tail, "%s!A%d:%s%d" % (sheet_id, tail, last, tail))
-    # ④ 取值模式：排除「UnformattedValue 需要重算公式」这一可能
+        probe("另一子表「%s」5 行" % other, "%s!A2:%s6" % (s["sheet_id"], wide))
+    # ⑥ 失败块本体：确认当前这次到底是不是也失败
     if tried_rng:
-        probe("失败块改 FormattedValue", tried_rng, "FormattedValue")
-    # ⑤ 右区单格：本次故障前右侧被加 24 列，确认右区是否独立于左区
-    probe("最右列 %s2" % last, "%s!%s2:%s2" % (sheet_id, last, last))
-    # ⑥ 中部抽样，补充定位（预算允许才跑）
-    for r in (100, 1000):
-        if 2 <= r <= int(row_count or 0):
-            probe("第 %d 行全宽" % r, "%s!A%d:%s%d" % (sheet_id, r, last, r))
+        probe("失败块 UnformattedValue", tried_rng, "UnformattedValue")
     if time.time() - started > budget_sec:
         lines.append("（诊断已用 %ds，达到预算上限，后续探针跳过）" % int(time.time() - started))
     return lines
