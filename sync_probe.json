@@ -1,0 +1,281 @@
+{
+  "mode": "formatted-fallback",
+  "at": "2026-11-09 11:15",
+  "fallbackBlocks": 14,
+  "fallbackSamples": [
+    "1xbuYm!A802:AL1201",
+    "1xbuYm!A1202:AL1601",
+    "1xbuYm!A1602:AL2001",
+    "1xbuYm!A2002:AL2401",
+    "1xbuYm!A2402:AL2801",
+    "1xbuYm!A2802:AL2930",
+    "2PMtMW!A1:BO1",
+    "2PMtMW!A2:AL401",
+    "2PMtMW!A402:AL801",
+    "2PMtMW!A802:AL1201",
+    "2PMtMW!A1202:AL1208",
+    "3eqWwP!A1:BO1"
+  ],
+  "recordCount": 8056,
+  "perStore": {
+    "摩登新贵女": 3675,
+    "轻熟质享客": 2751,
+    "云端商务家": 1031,
+    "视频号": 599
+  },
+  "vsPrev": {
+    "comparedGroups": 1156,
+    "onlyInPrev": 0,
+    "onlyInCur": 0,
+    "diffCount": 293,
+    "sample": [
+      {
+        "shop": "云端商务家",
+        "date": "04-09",
+        "field": "sales",
+        "prev": 58.8,
+        "cur": 59.0,
+        "delta": 0.2
+      },
+      {
+        "shop": "云端商务家",
+        "date": "04-11",
+        "field": "sales",
+        "prev": 58.8,
+        "cur": 59.0,
+        "delta": 0.2
+      },
+      {
+        "shop": "云端商务家",
+        "date": "04-13",
+        "field": "sales",
+        "prev": 5706.29,
+        "cur": 5706.0,
+        "delta": -0.29
+      },
+      {
+        "shop": "云端商务家",
+        "date": "04-19",
+        "field": "sales",
+        "prev": 3716.06,
+        "cur": 3716.0,
+        "delta": -0.06
+      },
+      {
+        "shop": "云端商务家",
+        "date": "04-21",
+        "field": "sales",
+        "prev": 7619.5,
+        "cur": 7620.0,
+        "delta": 0.5
+      },
+      {
+        "shop": "云端商务家",
+        "date": "04-23",
+        "field": "sales",
+        "prev": 22450.73,
+        "cur": 22451.0,
+        "delta": 0.27
+      },
+      {
+        "shop": "云端商务家",
+        "date": "04-27",
+        "field": "sales",
+        "prev": 31348.72,
+        "cur": 31349.0,
+        "delta": 0.28
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-10",
+        "field": "sales",
+        "prev": 7660.37,
+        "cur": 7660.0,
+        "delta": -0.37
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-12",
+        "field": "sales",
+        "prev": 5814.6,
+        "cur": 5815.0,
+        "delta": 0.4
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-15",
+        "field": "sales",
+        "prev": 41515.69,
+        "cur": 41516.0,
+        "delta": 0.31
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-16",
+        "field": "sales",
+        "prev": 19242.22,
+        "cur": 19242.0,
+        "delta": -0.22
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-17",
+        "field": "sales",
+        "prev": 35911.07,
+        "cur": 35911.0,
+        "delta": -0.07
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-18",
+        "field": "sales",
+        "prev": 9089.62,
+        "cur": 9089.0,
+        "delta": -0.62
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-19",
+        "field": "sales",
+        "prev": 18001.8,
+        "cur": 18002.0,
+        "delta": 0.2
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-20",
+        "field": "sales",
+        "prev": 8445.91,
+        "cur": 8446.0,
+        "delta": 0.09
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-24",
+        "field": "sales",
+        "prev": 20205.47,
+        "cur": 20205.0,
+        "delta": -0.47
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-26",
+        "field": "sales",
+        "prev": 4381.4,
+        "cur": 4382.0,
+        "delta": 0.6
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-27",
+        "field": "sales",
+        "prev": 7887.53,
+        "cur": 7888.0,
+        "delta": 0.47
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-28",
+        "field": "sales",
+        "prev": 22748.7,
+        "cur": 22749.0,
+        "delta": 0.3
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-29",
+        "field": "sales",
+        "prev": 18439.88,
+        "cur": 18440.0,
+        "delta": 0.12
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-30",
+        "field": "sales",
+        "prev": 17250.32,
+        "cur": 17250.0,
+        "delta": -0.32
+      },
+      {
+        "shop": "云端商务家",
+        "date": "05-31",
+        "field": "sales",
+        "prev": 12962.66,
+        "cur": 12963.0,
+        "delta": 0.34
+      },
+      {
+        "shop": "云端商务家",
+        "date": "06-01",
+        "field": "sales",
+        "prev": 7299.7,
+        "cur": 7300.0,
+        "delta": 0.3
+      },
+      {
+        "shop": "云端商务家",
+        "date": "06-07",
+        "field": "sales",
+        "prev": 11039.09,
+        "cur": 11039.0,
+        "delta": -0.09
+      },
+      {
+        "shop": "云端商务家",
+        "date": "06-09",
+        "field": "sales",
+        "prev": 20658.32,
+        "cur": 20658.0,
+        "delta": -0.32
+      },
+      {
+        "shop": "云端商务家",
+        "date": "06-11",
+        "field": "sales",
+        "prev": 21289.18,
+        "cur": 21290.0,
+        "delta": 0.82
+      },
+      {
+        "shop": "云端商务家",
+        "date": "06-12",
+        "field": "sales",
+        "prev": 13536.5,
+        "cur": 13537.0,
+        "delta": 0.5
+      },
+      {
+        "shop": "云端商务家",
+        "date": "06-13",
+        "field": "sales",
+        "prev": 10724.49,
+        "cur": 10724.0,
+        "delta": -0.49
+      },
+      {
+        "shop": "云端商务家",
+        "date": "06-14",
+        "field": "sales",
+        "prev": 19169.04,
+        "cur": 19169.0,
+        "delta": -0.04
+      },
+      {
+        "shop": "云端商务家",
+        "date": "06-15",
+        "field": "sales",
+        "prev": 67485.55,
+        "cur": 67486.0,
+        "delta": 0.45
+      }
+    ]
+  },
+  "perStorePrev": {
+    "摩登新贵女": 3673,
+    "轻熟质享客": 2751,
+    "云端商务家": 1031,
+    "视频号": 599
+  },
+  "note": "本次未覆盖 live_data.json。vsPrev.diffCount=0 才说明 FormattedValue 与 UnformattedValue 口径一致，可以切换。"
+}
