@@ -34,7 +34,10 @@ permissions:
 
 concurrency:
   group: sync-feishu
-  cancel-in-progress: false
+  # 改为 true：同一时刻只该有一次同步。若旧运行卡住（90235 会让单次请求
+  # 吃满超时），新代码推上来应当立刻顶替它，而不是排在后面等十几分钟。
+  # bot 的同步提交不在 paths 列表里，不会自我触发，因此不会误取消。
+  cancel-in-progress: true
 
 jobs:
   sync:

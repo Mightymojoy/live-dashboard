@@ -105,11 +105,16 @@ CHUNK_ROWS = 400
 # 90235 = Data not ready（电子表格读值实测命中）
 # 1254607 = Data not ready（多维表格文档中同义错误码）
 # 1255040 = Request timed out（服务端计算超时）
-TRANSIENT_CODES = {90235, 1254607, 1255040}
+# -1：本地连接超时/网络错误（读值时飞书可能长时间不回包）
+TRANSIENT_CODES = {90235, 1254607, 1255040, -1}
 # 遇到上述错误时按行对半拆的最大层数：400 → 200 → 100
 # 不宜更深：2026-11-09 实测拆到 950 个格子（25 行）仍然失败，说明不是体量问题；
 # 而每次 90235 飞书要算约 30 秒才超时，多拆一层就多烧半分钟。
 MAX_SPLIT_DEPTH = 2
+# 读值单次超时。遇 90235 时飞书要算到超时才回包（实测吃满 120 秒），
+# 压到 45 秒能把"失败链"从十分钟级降到分钟级；正常读 400 行 x 27 列仅 1-3 秒。
+READ_TIMEOUT = 45
+PROBE_TIMEOUT = 25
 
 
 class NotReady(Exception):
@@ -137,8 +142,12 @@ def log(msg):
     print(msg, flush=True)
 
 
-def http_json(method, path, token=None, payload=None, params=None):
-    """仅用标准库发请求，避免依赖 requests（Actions 侧也无需 pip install）。"""
+def http_json(method, path, token=None, payload=None, params=None, timeout=120):
+    """仅用标准库发请求，避免依赖 requests（Actions 侧也无需 pip install）。
+
+    timeout 可按调用点收紧：读值时若遇到 90235，飞书会先算到超时才回包
+    （实测吃满 120 秒），把超时压低能显著缩短失败链耗时。
+    """
     url = path if path.startswith("http") else BASE + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -148,7 +157,7 @@ def http_json(method, path, token=None, payload=None, params=None):
     if token:
         req.add_header("Authorization", "Bearer " + token)
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "ignore")
@@ -158,6 +167,8 @@ def http_json(method, path, token=None, payload=None, params=None):
             return {"code": e.code, "msg": body[:200]}
     except urllib.error.URLError as e:
         return {"code": -1, "msg": "网络错误: %s" % e.reason}
+    except (TimeoutError, OSError) as e:
+        return {"code": -1, "msg": "连接超时: %s" % e}
 
 
 def get_env(name, required=True):
@@ -177,8 +188,8 @@ def get_token(app_id, app_secret):
     return data["tenant_access_token"]
 
 
-def api_get(token, path, params=None):
-    return http_json("GET", path, token=token, params=params)
+def api_get(token, path, params=None, timeout=120):
+    return http_json("GET", path, token=token, params=params, timeout=timeout)
 
 
 def resolve_node(token, wiki_token):
@@ -323,7 +334,7 @@ def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
     rng = "%s!%s%d:%s%d" % (sheet_id, col_letter(c1), r1, col_letter(c2), r2)
     path = "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng)
     params = {"valueRenderOption": "UnformattedValue"}
-    data = api_get(token, path, params)
+    data = api_get(token, path, params, timeout=READ_TIMEOUT)
     code = data.get("code")
 
     if code == 0:
@@ -341,7 +352,7 @@ def read_block(token, st, sheet_id, c1, c2, r1, r2, trace, depth=0):
         # 已到最小粒度：给一次短等待（排除瞬时抖动），仍不行则判定区域性未就绪。
         # 不在这里做多次退避 —— 每次 90235 本身就要 ~30 秒，多试会顶穿作业超时。
         time.sleep(3)
-        data = api_get(token, path, params)
+        data = api_get(token, path, params, timeout=READ_TIMEOUT)
         if data.get("code") == 0:
             return (data.get("data") or {}).get("valueRange", {}).get("values") or []
         if data.get("code") in TRANSIENT_CODES:
@@ -424,7 +435,8 @@ def diagnose(token, st, sheet_id, title, last_col, row_count, sheets, want_sheet
             return "timeout"
         params = {"valueRenderOption": render} if render else None
         try:
-            d = api_get(token, "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng), params)
+            d = api_get(token, "/sheets/v2/spreadsheets/%s/values/%s" % (st, rng),
+                        params, timeout=PROBE_TIMEOUT)
         except Exception as exc:
             lines.append("%s → 请求异常 %s" % (label, exc))
             return "error"
