@@ -13,21 +13,27 @@ on:
       - 'tools/feishu_field_map.json'
       - '.github/workflows/sync-feishu.yml'
   schedule:
-    # 北京时间 10:07 与 15:07（UTC 02:07 / 07:07）
+    # 每 2 小时一班（UTC），分钟错到 :07 避开整点高负载区段。
     #
-    # 三条硬约束决定了为什么不是 0 2 * * *（北京 10:00 整）：
-    # 1) GitHub cron 一律按 UTC 解释，北京 10:00 必须写 2 时，不是 10 时；
-    # 2) 官方文档明确 "High load times include the start of every hour. If the load
-    #    is sufficiently high enough, some queued jobs may be dropped" ——
-    #    整点边界既有延迟也有被丢弃的风险，因此统一错到 :07；
-    # 3) 单点无备份 = 一次被丢当天就断更。实测 11-04：北京 09:17 那次 schedule
-    #    被丢弃、13:17 那次延迟到 15:29 才启动，故保留下午一个时点兜底，
-    #    两次间隔 5 小时覆盖整个上班时段。
+    # 注意这不是「每 2 小时同步一次」。真正的同步由脚本里的 schedule_gate()
+    # 决定：只有「北京时间已过 02:00」且「今天还没成功同步过」才执行，
+    # 其余班次读到闸门就退出，不写文件、不提交，页面时间戳不变。
+    #
+    # 为什么不再写死两个时点（原 7 2 / 7 7 = 北京 10:07 / 15:07）：
+    # GitHub 的 schedule 实测迟到 7–10 小时且在恶化
+    #   11-09 设 10:07 → 实跑 17:39（迟 7h32m）
+    #   11-11 设 15:07 → 实跑 23:04（迟 7h57m）
+    #   11-09 设 15:07 → 实跑次日 01:23（迟 10h16m）
+    # 于是 15:07 那班每次都变成深夜 23 点跑（用户看到的「23 点触发」就是它），
+    # 而 10:07 那班落到傍晚。追着延迟改数字是拿变化的量凑固定时刻，必输；
+    # 改成「多发班次 + 运行时就地判断」，延迟多少都不影响正确性。
+    #
+    # 业务前提：最后一班主播在凌晨 2 点前录完，所以 02:00 之后的第一个班次
+    # 抓到的才是「昨天完整数据」，早上打开即可用，无需手动点同步。
     #
     # 注意：schedule 事件只读默认分支（main）上的工作流文件，
     # 改这里必须同时更新 dist 与 main，否则等于没改。
-    - cron: '7 2 * * *'
-    - cron: '7 7 * * *'
+    - cron: '7 */2 * * *'
 
 permissions:
   contents: write
@@ -61,6 +67,9 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_WIKI_TOKEN: ${{ secrets.FEISHU_WIKI_TOKEN }}
           SYNC_ACTOR: GitHub Actions
+          # 让脚本区分触发来源：只有 schedule 走「02:00 后且今日未同步」的闸门，
+          # 手动点击与改脚本触发的运行仍然立即执行（排查时不能被闸门挡住）。
+          SYNC_TRIGGER: ${{ github.event_name }}
         run: python tools/feishu_sync.py --sync
 
       - name: 提交并推送

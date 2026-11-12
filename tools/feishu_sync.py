@@ -832,6 +832,45 @@ def compare_records(prev, cur, tol_rel=1e-9):
     }
 
 
+# 北京时间几点之后源表才算「昨天数据已齐」：最后一班主播在凌晨 2 点前收工，
+# 因此 02:00 之前抓到的快照一定缺当晚最后几场，会出现「截止日写着昨天、
+# 但内容不完整」这种最难发现的错。低于这个点一律不同步。
+SYNC_WINDOW_HOUR = 2
+
+
+def schedule_gate():
+    """定时触发的闸门：只有「已过 02:00」且「今天还没成功同步过」才放行。
+
+    为什么不在 cron 上直接写死时间：GitHub 的 schedule 实测迟到 7–10 小时
+    且在恶化（11-09 迟 7h32m → 11-11 迟 10h16m）。写 02:00 会在 10:00 落地，
+    早上仍看到前一天的数据；若哪天延迟恢复正常又会在 2:00 前跑，抓到残缺快照。
+    把判断从「设定时刻」搬到「实际时刻」，延迟是多少都不影响正确性。
+
+    返回 (skip, reason)。
+    """
+    now = now_beijing()
+    if now.hour < SYNC_WINDOW_HOUR:
+        return True, "当前北京 %s，早于 %02d:00（当晚最后几场还没录完）" % (
+            now.strftime("%H:%M"), SYNC_WINDOW_HOUR)
+
+    stamp = ""
+    if os.path.exists(META_PATH):
+        try:
+            with open(META_PATH, encoding="utf-8") as fp:
+                stamp = str((json.load(fp) or {}).get("syncedAt") or "")
+        except (ValueError, OSError):
+            stamp = ""
+    # syncedAt 形如 "2026-11-12 09:43"
+    if stamp.startswith(now.strftime("%Y-%m-%d")):
+        try:
+            hh = int(stamp.split(" ")[1].split(":")[0])
+        except (IndexError, ValueError):
+            hh = -1
+        if hh >= SYNC_WINDOW_HOUR:
+            return True, "今天已于 %s 完成同步，今日不再重复" % stamp.split(" ")[1]
+    return False, ""
+
+
 def cmd_sync(token, obj_type, obj_token, dry_run=False):
     if obj_type != "sheet":
         log("[中止] 当前节点类型 %s，本脚本只支持电子表格。" % obj_type)
@@ -966,6 +1005,16 @@ def main():
     if not args.inspect and not args.sync:
         ap.print_help()
         return
+
+    # 闸门放在取 token 之前：被跳过的班次连飞书接口都不碰，也就不可能因
+    # 凭证失效之类的偶发问题连红十几次。手动触发与 --dry-run 一律不过闸门。
+    trigger = (os.environ.get("SYNC_TRIGGER") or "").strip().lower()
+    if trigger == "schedule" and args.sync and not args.dry_run:
+        skip, why = schedule_gate()
+        if skip:
+            log("[跳过] %s" % why)
+            log("       本次不写任何文件、不提交；页面上的同步时间保持不变。")
+            return
 
     app_id = get_env("FEISHU_APP_ID")
     app_secret = get_env("FEISHU_APP_SECRET")
