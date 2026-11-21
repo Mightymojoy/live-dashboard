@@ -1,9 +1,9 @@
 {
   "status": "ok",
   "source": "飞书知识库",
-  "dataCutoff": "2026-11-20",
-  "recordCount": 8272,
-  "syncedAt": "2026-11-21 05:45",
+  "dataCutoff": "2026-11-21",
+  "recordCount": 8287,
+  "syncedAt": "2026-11-22 04:27",
   "updatedBy": "GitHub Actions",
   "futureRecords": 0,
   "note": "页面运行时读取本文件，用于显示真实的数据截止时间与同步状态。"
